@@ -19,6 +19,20 @@ def _is_running(pid, accept_stopped=False):
     else:
         return False
 
+def _cmdline(pid):
+    dr = '/proc/%d' % pid
+    if os.path.isdir(dr):
+        f = open('%s/cmdline' % dr)
+        try:
+            cmdline = f.read().split("\0")
+            if cmdline[-1] == '':
+                cmdline.pop()
+            return cmdline
+        finally:
+            f.close()
+    else:
+        return []
+
 def _stop_process(pid):
     os.kill(pid, signal.SIGSTOP)
 
@@ -126,10 +140,11 @@ def do_setprio(sched, p):
 
 def do_list(sched, p):
     for pid, prio in sched.pids:
-        mark = ""
+        mark = " "
         if _is_running(pid, False):
             mark = "*"
-        print "%8d  %.2g  %s" % (pid, prio, mark)
+        cmdline = ' '.join(_cmdline(pid))
+        print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
 
 def do_run(sched, p):
     parent_pid = os.getpid()
