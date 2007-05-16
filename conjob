@@ -1,5 +1,6 @@
-#!/usr/bin/env python
-import os, sys, time, optparse, configobj, signal
+#!/usr/bin/env python2.4
+# -*-python-*-
+import os, sys, time, optparse, signal, configobj
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -130,7 +131,48 @@ def do_list(sched, p):
             mark = "*"
         print "%8d  %.2g  %s" % (pid, prio, mark)
 
-def main():
+def do_run(sched, p):
+    parent_pid = os.getpid()
+    pid = os.fork()
+    if pid < 0:
+        raise RuntimeError("Failed to fork the process")
+    elif pid == 0:
+        # child
+        print "Adding job PID %d" % parent_pid
+        sched.add(parent_pid, 0)
+        sched.save()
+        sys.exit(0)
+    else:
+        # parent
+        _stop_process(os.getpid())
+        os.execvp(p.args[0], p.args)
+        raise RuntimeError("Failed to execute command '%s'" % p.args)
+
+def do_run_bg(sched, p):
+    pid = os.fork()
+    if pid < 0:
+        raise RuntimeError("Failed to fork the process")
+    elif pid == 0:
+        # child
+        time.sleep(0.1)
+
+        # invoke in background
+        os.setsid()        # new process group
+        sys.stdin.close()  # close inherited IO handles
+        sys.stdout.close()
+        sys.stderr.close()
+
+        os.execvp(p.args[0], p.args)
+        raise RuntimeError("Failed to execute command '%s'" % p.args)
+    else:
+        # parent
+        _stop_process(pid)
+        print "Adding job PID %d" % pid
+        sched.add(pid, 0)
+        sched.save()
+        sys.exit(0)
+
+def main(argv):
     help = """
 Process job controller, letting a limited number of jobs run at the same
 time.
@@ -141,10 +183,13 @@ commands:
   list                List scheduled PIDs
   schedule            Perfom scheduling, starting/stopping processes
   setprio PID PRIO    Set a priority for a PID
+  run CMD             Run a command and put the process in the queue
+  bg CMD              Run a command in the background and insert to queue
 """.strip()
     
     p = optparse.OptionParser("%prog [options] command [PIDS...]\n\n" + help)
-    (options, args) = p.parse_args()
+    p.allow_interspersed_args = False
+    (options, args) = p.parse_args(argv)
 
     if len(args) < 1:
         p.error("No command given")
@@ -155,7 +200,11 @@ commands:
                 schedule=do_schedule,
                 remove=do_remove,
                 setprio=do_setprio,
-                list=do_list)
+                list=do_list,
+                run=do_run,
+                bg=do_run_bg,
+                ls=do_list,
+                rm=do_remove)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
@@ -168,4 +217,4 @@ commands:
         func(sched, p)
     
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
