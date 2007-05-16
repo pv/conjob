@@ -65,7 +65,6 @@ class PidScheduler(object):
         cfg.write()
 
     def save(self):
-        self.cfg.write()
         self.save_pids()
     
     def add(self, pid, prio):
