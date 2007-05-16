@@ -3,13 +3,16 @@ import os, sys, time, optparse, configobj, signal
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
-def _is_running(pid):
+def _is_running(pid, accept_stopped=False):
     dr = '/proc/%d' % pid
     if os.path.isdir(dr):
         f = open('%s/stat' % dr)
         try:
             x = f.read().split()
-            return (x[2] == 'R')
+            if accept_stopped:
+                return (x[2] == 'R') or (x[2] == 'T')
+            else:
+                return (x[2] == 'R')
         finally:
             f.close()
     else:
@@ -64,7 +67,7 @@ class PidScheduler(object):
                 self.pids.remove(v)
 
     def _update(self):
-        self.pids = [z for z in self.pids if _is_running(z[0])]
+        self.pids = [z for z in self.pids if _is_running(z[0], True)]
 
     def schedule(self):
         def _cmp_prio(a, b):
@@ -74,7 +77,7 @@ class PidScheduler(object):
         self._update()
 
         # Sort
-        self.pids.sort(_cmp_prio)
+        self.pids.sort(_cmp_prio, reverse=True)
         nprocs = int(self.cfg['nprocs'])
 
         # Stop / continue
@@ -122,10 +125,16 @@ def do_setprio(sched, p):
 
 def do_list(sched, p):
     for pid, prio in sched.pids:
-        print "%8d  %.2g" % (pid, prio)
+        mark = ""
+        if _is_running(pid, False):
+            mark = "*"
+        print "%8d  %.2g  %s" % (pid, prio, mark)
 
 def main():
     help = """
+Process job controller, letting a limited number of jobs run at the same
+time.
+    
 commands:
   add PID             Add a PID to the schedule list
   remove PID          Remove a PID from the schedule list
