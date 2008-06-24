@@ -1,7 +1,6 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
 import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob
-import subprocess
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -221,7 +220,8 @@ def do_tail(sched, p):
         f.close()
     print "-"*79
 
-    subprocess.call(['tail', '-f'] + files)
+    cmd = ['tail', '-f'] + files
+    os.execvp(cmd[0], cmd)
 
 def do_run(sched, p):
     parent_pid = os.getpid()
