@@ -267,7 +267,7 @@ def do_run_bg(sched, p):
         raise RuntimeError("Failed to execute command '%s'" % p.args)
     else:
         # parent
-        #_stop_process(pid)
+        _stop_process(pid)
         print "Adding job PID %d" % pid
         sched.add(pid, p.options.priority)
         sched.save()
