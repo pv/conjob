@@ -191,6 +191,8 @@ def do_list(sched, p):
         mark = " "
         if _is_running(pid, False):
             mark = "*"
+        elif not _is_running(pid, True):
+            continue
         cmdline = ' '.join(_cmdline(pid))
         print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
 
