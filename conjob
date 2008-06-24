@@ -206,7 +206,8 @@ def do_run(sched, p):
         sched.save()
         sys.exit(0)
     else:
-        # parent
+        # parent (we purposefully exec the code here so that we properly
+        # retain the controlling terminal)
         _stop_process(os.getpid())
         os.nice(sched.cfg['nice'])
         os.execvp(p.args[0], p.args)
