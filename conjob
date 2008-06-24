@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.4
+#!/usr/bin/env python2.5
 # -*-python-*-
 import os, sys, time, optparse, signal, configobj
 
@@ -45,6 +45,10 @@ class PidScheduler(object):
         self.cfg = configobj.ConfigObj(filename)
         self.cfg.setdefault('pidlist', filename + '.pids')
         self.cfg.setdefault('nprocs', 2)
+        self.cfg.setdefault('nice', 10)
+        self.cfg['nice'] = int(self.cfg['nice'])
+        self.cfg['nprocs'] = int(self.cfg['nprocs'])
+        self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.load_pids()
     
     def load_pids(self):
@@ -92,7 +96,7 @@ class PidScheduler(object):
 
         # Sort
         self.pids.sort(_cmp_prio, reverse=True)
-        nprocs = int(self.cfg['nprocs'])
+        nprocs = self.cfg['nprocs']
 
         # Stop / continue
         to_run = self.pids[:nprocs]
@@ -153,12 +157,13 @@ def do_run(sched, p):
     elif pid == 0:
         # child
         print "Adding job PID %d" % parent_pid
-        sched.add(parent_pid, 0)
+        sched.add(parent_pid, p.options.priority)
         sched.save()
         sys.exit(0)
     else:
         # parent
         _stop_process(os.getpid())
+        os.nice(sched.cfg['nice'])
         os.execvp(p.args[0], p.args)
         raise RuntimeError("Failed to execute command '%s'" % p.args)
 
@@ -176,13 +181,14 @@ def do_run_bg(sched, p):
         sys.stdout.close()
         sys.stderr.close()
 
+        os.nice(sched.cfg['nice'])
         os.execvp(p.args[0], p.args)
         raise RuntimeError("Failed to execute command '%s'" % p.args)
     else:
         # parent
         _stop_process(pid)
         print "Adding job PID %d" % pid
-        sched.add(pid, 0)
+        sched.add(pid, p.options.priority)
         sched.save()
         sys.exit(0)
 
@@ -202,6 +208,9 @@ commands:
 """.strip()
     
     p = optparse.OptionParser("%prog [options] command [PIDS...]\n\n" + help)
+    p.add_option('-p', '--priority', action='store', type=str,
+                 dest='priority', default=0,
+                 help="Priority for the started process")
     p.allow_interspersed_args = False
     (options, args) = p.parse_args(argv)
 
