@@ -215,7 +215,10 @@ def do_tail(sched, p):
         return
 
     for fn in files:
-        print os.path.basename(fn)
+        print fn
+        f = open(fn, 'r')
+        print "    " + f.readline(),
+        f.close()
     print "-"*79
 
     subprocess.call(['tail', '-f'] + files)
