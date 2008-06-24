@@ -43,13 +43,18 @@ class PidScheduler(object):
     def __init__(self, filename):
         self.pids = []
         self.cfg = configobj.ConfigObj(filename)
+        self.cfg.setdefault('logdir', filename + '.log')
         self.cfg.setdefault('pidlist', filename + '.pids')
         self.cfg.setdefault('nprocs', 2)
         self.cfg.setdefault('nice', 10)
         self.cfg['nice'] = int(self.cfg['nice'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
+        self.cfg['logdir'] = str(self.cfg['logdir'])
         self.load_pids()
+
+        if not os.path.isdir(self.cfg['logdir']):
+            os.makedirs(self.cfg['logdir'])
     
     def load_pids(self):
         cfg = configobj.ConfigObj(self.cfg['pidlist'])
@@ -116,6 +121,40 @@ class PidScheduler(object):
 
         self.save_pids()
 
+    def logfile(self, pid, timestamp=None):
+        cmdline = _cmdline(pid)
+        if not _is_running(pid, True):
+            return None
+        
+        if timestamp is None:
+            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+
+        for arg in (sys.argv[0], 'conjob'):
+            if arg in cmdline:
+                cmdline = cmdline[cmdline.index(arg)+2:]
+                break
+        
+        if cmdline and cmdline[0].startswith('python2.'):
+            cmdline.pop(0)
+        
+        if cmdline:
+            cmd = os.path.basename(cmdline[0])
+        else:
+            cmd = 'log'
+            
+        logfile_fn = os.path.join(
+            self.cfg['logdir'], '%s.%s.%d' % (cmd, timestamp, pid))
+        
+        if not os.path.isfile(logfile_fn):
+            f = open(logfile_fn, 'w')
+            hdr = "%s\n%s\n%s\n%s\n" % (' '.join(cmdline), timestamp,
+                                        os.getcwd(), "-"*79)
+            f.write(hdr)
+            f.close()
+        
+        f = open(logfile_fn, 'a')
+        return f
+
 def do_add(sched, p):
     for x in p.args:
         try:
@@ -180,19 +219,25 @@ def do_run_bg(sched, p):
     elif pid == 0:
         # child
         time.sleep(0.1)
-
+        
         # invoke in background
-        os.setsid()        # new process group
-        sys.stdin.close()  # close inherited IO handles
-        sys.stdout.close()
-        sys.stderr.close()
+        os.setsid()
 
+        # redirect output + close input
+        f = sched.logfile(os.getpid())
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdin.close()
+        os.dup2(f.fileno(), sys.stdout.fileno())
+        os.dup2(f.fileno(), sys.stderr.fileno())
+
+        # run command
         os.nice(sched.cfg['nice'])
         os.execvp(p.args[0], p.args)
         raise RuntimeError("Failed to execute command '%s'" % p.args)
     else:
         # parent
-        _stop_process(pid)
+        #_stop_process(pid)
         print "Adding job PID %d" % pid
         sched.add(pid, p.options.priority)
         sched.save()
@@ -211,6 +256,7 @@ commands:
   setprio PID PRIO    Set a priority for a PID
   run CMD             Run a command and put the process in the queue
   bg CMD              Run a command in the background and insert to queue
+                      Redirect the output to a file in ~/.conjob.log/
 """.strip()
     
     p = optparse.OptionParser("%prog [options] command [PIDS...]\n\n" + help)
