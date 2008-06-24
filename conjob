@@ -1,6 +1,7 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
-import os, sys, time, optparse, signal, configobj, tempfile, shutil
+import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob
+import subprocess
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -196,6 +197,29 @@ def do_list(sched, p):
         cmdline = ' '.join(_cmdline(pid))
         print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
 
+def do_tail(sched, p):
+    pids = [pid for pid, prio in sched.pids]
+    if p.args:
+        try:
+            pids = [int(pid) for pid in p.args]
+        except ValueError:
+            p.error('one of PIDS is not a number')
+    
+    files = []
+    for pid in pids:
+        log_glob = os.path.join(sched.cfg['logdir'], '*.%d' % (pid,))
+        files.extend(glob.glob(log_glob))
+
+    if not files:
+        print "No files to tail"
+        return
+
+    for fn in files:
+        print os.path.basename(fn)
+    print "-"*79
+
+    subprocess.call(['tail', '-f'] + files)
+
 def do_run(sched, p):
     parent_pid = os.getpid()
     pid = os.fork()
@@ -245,7 +269,7 @@ def do_run_bg(sched, p):
         sched.add(pid, p.options.priority)
         sched.save()
         sys.exit(0)
-
+        
 def main(argv):
     help = """
 Process job controller, letting a limited number of jobs run at the same
@@ -282,7 +306,8 @@ commands:
                 run=do_run,
                 bg=do_run_bg,
                 ls=do_list,
-                rm=do_remove)
+                rm=do_remove,
+                tail=do_tail)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
