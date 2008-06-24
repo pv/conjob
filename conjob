@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
-import os, sys, time, optparse, signal, configobj
+import os, sys, time, optparse, signal, configobj, tempfile, shutil
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -62,11 +62,17 @@ class PidScheduler(object):
                 continue
 
     def save_pids(self):
+        # avoid write races by writing to a temp file and overwriting
+        # by moving (which probably is atomic within a FS)
+        fd, tmp_fn = tempfile.mkstemp(
+                prefix=os.path.basename(self.cfg['pidlist']),
+                dir=os.path.dirname(self.cfg['pidlist']))
         cfg = configobj.ConfigObj()
-        cfg.filename = self.cfg['pidlist']
+        cfg.filename = tmp_fn
         for pid, prio in self.pids:
             cfg[str(pid)] = prio
         cfg.write()
+        shutil.move(tmp_fn, self.cfg['pidlist'])
 
     def save(self):
         self.save_pids()
