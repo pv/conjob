@@ -11,9 +11,9 @@ def _is_running(pid, accept_stopped=False):
         try:
             x = f.read().split()
             if accept_stopped:
-                return (x[2] == 'R') or (x[2] == 'T')
+                return True
             else:
-                return (x[2] == 'R')
+                return (x[2] != 'T')
         finally:
             f.close()
     else:
@@ -32,6 +32,16 @@ def _cmdline(pid):
             f.close()
     else:
         return []
+
+def _nice_cmdline(pid):
+    cmdline = _cmdline(pid)
+    for arg in (sys.argv[0], 'conjob'):
+        if arg in cmdline:
+            cmdline = cmdline[cmdline.index(arg)+2:]
+            break
+    if cmdline and cmdline[0].startswith('python2.'):
+        cmdline.pop(0)
+    return cmdline
 
 def _stop_process(pid):
     os.kill(pid, signal.SIGSTOP)
@@ -122,20 +132,13 @@ class PidScheduler(object):
         self.save_pids()
 
     def logfile(self, pid, timestamp=None):
-        cmdline = _cmdline(pid)
         if not _is_running(pid, True):
             return None
         
         if timestamp is None:
             timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
 
-        for arg in (sys.argv[0], 'conjob'):
-            if arg in cmdline:
-                cmdline = cmdline[cmdline.index(arg)+2:]
-                break
-        
-        if cmdline and cmdline[0].startswith('python2.'):
-            cmdline.pop(0)
+        cmdline = _nice_cmdline(pid)
         
         if cmdline:
             cmd = os.path.basename(cmdline[0])
@@ -192,8 +195,10 @@ def do_list(sched, p):
         if _is_running(pid, False):
             mark = "*"
         elif not _is_running(pid, True):
-            continue
-        cmdline = ' '.join(_cmdline(pid))
+            mark = "/"
+        cmdline = ' '.join(_nice_cmdline(pid))
+        if not cmdline:
+            cmdline = "---"
         print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
 
 def do_tail(sched, p):
