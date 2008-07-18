@@ -268,8 +268,9 @@ def do_run_bg(sched, p):
     # redirect output + close input
     sys.stdout.flush()
     sys.stderr.flush()
-    sys.stdin.close()
     f = sched.logfile(os.getpid())
+    f2 = open(os.devnull, 'r')
+    os.dup2(f2.fileno(), sys.stdin.fileno())
     os.dup2(f.fileno(), sys.stdout.fileno())
     os.dup2(f.fileno(), sys.stderr.fileno())
 
