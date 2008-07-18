@@ -212,6 +212,37 @@ def do_list(sched, p):
         except IOError:
             return
 
+def do_killall(sched, p):
+    queue = []
+
+    def _flush():
+        for pid2 in queue:
+            for k in xrange(50):
+                if not _is_running(pid2): break
+                time.sleep(0.05)
+        for pid2 in queue:
+            if _is_running(pid2):
+                os.kill(pid, signal.SIGKILL)
+        queue[:] = []
+
+    for pid, prio in sched.pids:
+        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGCONT)
+        queue.append(pid)
+
+        # clean
+        time.sleep(0.01)
+        for pid2 in queue:
+            if not _is_running(pid2):
+                queue.remove(pid2)
+
+        # check if forcing flush is needed
+        if len(queue) > sched.cfg['nprocs']:
+            _flush()
+    
+    _flush()
+    sched._update()
+
 def do_tail(sched, p):
     pids = [pid for pid, prio in sched.pids]
     if p.args:
@@ -300,6 +331,7 @@ commands:
   run CMD             Run a command and put the process in the queue
   bg CMD              Run a command in the background and insert to queue
                       Redirect the output to a file in ~/.conjob.log/
+  killall             Kill all processes
 """.strip()
     
     p = optparse.OptionParser("%prog [options] command [PIDS...]\n\n" + help)
@@ -323,7 +355,8 @@ commands:
                 bg=do_run_bg,
                 ls=do_list,
                 rm=do_remove,
-                tail=do_tail)
+                tail=do_tail,
+                killall=do_killall)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
