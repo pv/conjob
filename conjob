@@ -49,6 +49,12 @@ def _stop_process(pid):
 def _continue_process(pid):
     os.kill(pid, signal.SIGCONT)
 
+def _set_ioprio(pid, ioprio=0):
+    """
+    Set IO priority
+    """
+    os.system('ionice -p %d -n %d' % (pid, ioprio))
+
 class PidScheduler(object):
     def __init__(self, filename):
         self.pids = []
@@ -57,7 +63,9 @@ class PidScheduler(object):
         self.cfg.setdefault('pidlist', filename + '.pids')
         self.cfg.setdefault('nprocs', 2)
         self.cfg.setdefault('nice', 10)
+        self.cfg.setdefault('ioprio', 7)
         self.cfg['nice'] = int(self.cfg['nice'])
+        self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
@@ -229,23 +237,14 @@ def do_tail(sched, p):
     os.execvp(cmd[0], cmd)
 
 def do_run(sched, p):
-    parent_pid = os.getpid()
-    pid = os.fork()
-    if pid < 0:
-        raise RuntimeError("Failed to fork the process")
-    elif pid == 0:
-        # child
-        print "Adding job PID %d" % parent_pid
-        sched.add(parent_pid, p.options.priority)
-        sched.save()
-        sys.exit(0)
-    else:
-        # parent (we purposefully exec the code here so that we properly
-        # retain the controlling terminal)
-        os.nice(sched.cfg['nice'])
-        _stop_process(os.getpid())
-        os.execvp(p.args[0], p.args)
-        raise RuntimeError("Failed to execute command '%s'" % p.args)
+    sched.add(os.getpid(), p.options.priority)
+    sched.save()
+
+    os.nice(sched.cfg['nice'])
+    _set_ioprio(os.getpid(), sched.cfg['ioprio'])
+    _stop_process(os.getpid())
+    os.execvp(p.args[0], p.args)
+    raise RuntimeError("Failed to execute command '%s'" % p.args)
 
 def do_run_bg(sched, p):
     pid = os.fork()
@@ -268,6 +267,7 @@ def do_run_bg(sched, p):
 
         # run command
         os.nice(sched.cfg['nice'])
+        _set_ioprio(os.getpid(), sched.cfg['ioprio'])
         _stop_process(os.getpid())
         os.execvp(p.args[0], p.args)
         raise RuntimeError("Failed to execute command '%s'" % p.args)
