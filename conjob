@@ -247,37 +247,41 @@ def do_run(sched, p):
     raise RuntimeError("Failed to execute command '%s'" % p.args)
 
 def do_run_bg(sched, p):
+    # 1st fork
     pid = os.fork()
-    if pid < 0:
-        raise RuntimeError("Failed to fork the process")
-    elif pid == 0:
-        # child
-        time.sleep(0.1)
-        
-        # invoke in background
-        os.setsid()
-
-        # redirect output + close input
-        f = sched.logfile(os.getpid())
-        sys.stdout.flush()
-        sys.stderr.flush()
-        sys.stdin.close()
-        os.dup2(f.fileno(), sys.stdout.fileno())
-        os.dup2(f.fileno(), sys.stderr.fileno())
-
-        # run command
-        os.nice(sched.cfg['nice'])
-        _set_ioprio(os.getpid(), sched.cfg['ioprio'])
-        _stop_process(os.getpid())
-        os.execvp(p.args[0], p.args)
-        raise RuntimeError("Failed to execute command '%s'" % p.args)
-    else:
-        # parent
-        print "Adding job PID %d" % pid
-        sched.add(pid, p.options.priority)
-        sched.save()
+    if pid > 0:
         sys.exit(0)
-        
+
+    # invoke in background
+    os.setsid()
+
+    # 2nd fork to remove session leader status
+    pid = os.fork()
+    if pid > 0:
+        sys.exit(0)
+
+    # add to scheduler
+    print "Added pid", os.getpid()
+    sched.add(os.getpid(), p.options.priority)
+    sched.save()
+
+    # redirect output + close input
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.stdin.close()
+    f = sched.logfile(os.getpid())
+    os.dup2(f.fileno(), sys.stdout.fileno())
+    os.dup2(f.fileno(), sys.stderr.fileno())
+
+    # renice
+    os.nice(sched.cfg['nice'])
+    _set_ioprio(os.getpid(), sched.cfg['ioprio'])
+
+    # stop and run
+    _stop_process(os.getpid())
+    os.execvp(p.args[0], p.args)
+    raise RuntimeError("Failed to execute command '%s'" % p.args)
+
 def main(argv):
     help = """
 Process job controller, letting a limited number of jobs run at the same
