@@ -207,7 +207,10 @@ def do_list(sched, p):
         cmdline = ' '.join(_nice_cmdline(pid))
         if not cmdline:
             cmdline = "---"
-        print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
+        try:
+            print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
+        except IOError:
+            return
 
 def do_tail(sched, p):
     pids = [pid for pid, prio in sched.pids]
