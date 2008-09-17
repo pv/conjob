@@ -1,6 +1,6 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
-import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob
+import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob, re
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -18,6 +18,32 @@ def _is_running(pid, accept_stopped=False):
             f.close()
     else:
         return False
+
+def _mem_usage(pid):
+    dr = '/proc/%d' % pid
+    if os.path.isdir(dr):
+        f = open('%s/status' % dr)
+        try:
+            lines = f.read().split("\n")
+            for line in lines:
+                m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                if m:
+                    return float(m.group(1))
+        finally:
+            f.close()
+    return 0    
+
+def _total_mem():
+    f = open('/proc/meminfo', 'r')
+    try:
+        lines = f.read().split("\n")
+        for line in lines:
+            m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
+            if m:
+                return float(m.group(1))
+    finally:
+        f.close()
+    return 1e99
 
 def _cmdline(pid):
     dr = '/proc/%d' % pid
@@ -64,11 +90,13 @@ class PidScheduler(object):
         self.cfg.setdefault('nprocs', 2)
         self.cfg.setdefault('nice', 10)
         self.cfg.setdefault('ioprio', 7)
+        self.cfg.setdefault('max_mem_percentage', 75)
         self.cfg['nice'] = int(self.cfg['nice'])
         self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
+        self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
         self.load_pids()
 
         if not os.path.isdir(self.cfg['logdir']):
@@ -126,6 +154,14 @@ class PidScheduler(object):
         # Sort
         self.pids.sort(_cmp_prio, reverse=True)
         nprocs = self.cfg['nprocs']
+
+        # Adjust according to memory usage
+        mem_max = _total_mem() * self.cfg['max_mem_percentage'] / 100.
+        for j, (pid, prio) in enumerate(self.pids[:nprocs]):
+            mem_max -= _mem_usage(pid)
+            if mem_max < 0 and j > 0:
+                nprocs = j
+                break
 
         # Stop / continue
         to_run = self.pids[:nprocs]
