@@ -45,6 +45,14 @@ def _total_mem():
         f.close()
     return 1e99
 
+def _get_loadavg():
+    f = open('/proc/loadavg', 'r')
+    try:
+        data = f.read()
+        return float(data.split()[0])
+    finally:
+        f.close()
+
 def _cmdline(pid):
     dr = '/proc/%d' % pid
     if os.path.isdir(dr):
@@ -90,10 +98,12 @@ class PidScheduler(object):
         self.cfg.setdefault('nprocs', 2)
         self.cfg.setdefault('nice', 10)
         self.cfg.setdefault('ioprio', 7)
+        self.cfg.setdefault('loadavg', 2)
         self.cfg.setdefault('max_mem_percentage', 75)
         self.cfg['nice'] = int(self.cfg['nice'])
         self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
+        self.cfg['loadavg'] = float(self.cfg['loadavg'])
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
         self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
@@ -154,6 +164,11 @@ class PidScheduler(object):
         # Sort
         self.pids.sort(_cmp_prio, reverse=True)
         nprocs = self.cfg['nprocs']
+
+        # Adjust according to load average
+        max_nprocs = int(nprocs + self.cfg['loadavg'] - _get_loadavg())
+        max_nprocs = max(1, max_nprocs)
+        nprocs = min(nprocs, max_nprocs)
 
         # Adjust according to memory usage
         mem_max = _total_mem() * self.cfg['max_mem_percentage'] / 100.
