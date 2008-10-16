@@ -166,7 +166,7 @@ class PidScheduler(object):
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
-        max_nprocs = int(nprocs + self.cfg['loadavg'] - _get_loadavg())
+        max_nprocs = int(nprocs + self.cfg['loadavg'] - _get_loadavg() - .5)
         max_nprocs = max(1, max_nprocs)
         nprocs = min(nprocs, max_nprocs)
 
