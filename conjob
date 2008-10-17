@@ -136,22 +136,62 @@ class PidScheduler(object):
         f = open(logfile_fn, 'a')
         return f
 
-def do_add(sched, p):
-    for x in p.args:
-        try:
-            pid = int(x)
-            sched.add(pid, 0)
-        except ValueError:
-            p.error("Invalid pid %s" % x)
-    sched.save()
+def pid_list_iter(listspec, in_sched=None):
+    if not isinstance(listspec, str):
+        for item in listspec:
+            for pid in pid_list_iter(item, in_sched):
+                yield pid
+        return
     
+    if listspec == 'all':
+        if in_sched is not None:
+            for pid, prio in in_sched.pids:
+                yield pid
+            return
+        else:
+            raise ValueError()
+    
+    if in_sched is None:
+        def check_pid(j):
+            pass
+    else:
+        valid_pids = {}
+        for pid, prio in in_sched.pids:
+            valid_pids[pid] = True
+        def check_pid(j):
+            return j in valid_pids
+
+    try:
+        items = [x.strip() for x in listspec.split(',')]
+        for item in items:
+            if '-' in item:
+                a, b = map(int, item.split('-'))
+                for j in xrange(a, b+1, 1):
+                    if check_pid(j):
+                        yield j
+            else:
+                j = int(item)
+                if check_pid(j):
+                    yield j
+    except ValueError:
+        raise ValueError("Invalid pid list '%s'" % listspec)
+
+def do_add(sched, p):
+    try:
+        for x in p.args:
+            for pid in pid_list_iter(x):
+                sched.add(pid, 0)
+    except ValueError:
+        p.error("Invalid pid %s" % x)
+    sched.save()
+
 def do_remove(sched, p):
-    for x in p.args:
-        try:
-            pid = int(x)
-            sched.remove(pid)
-        except ValueError:
-            p.error("Invalid pid %s" % x)
+    try:
+        for x in p.args:
+            for pid in pid_list_iter(x, sched):
+                sched.remove(pid)
+    except ValueError:
+        p.error("Invalid pid %s" % x)
     sched.save()
 
 def do_schedule(sched, p):
@@ -159,12 +199,12 @@ def do_schedule(sched, p):
 
 def do_setprio(sched, p):
     try:
-        pid = int(p.args[0])
-        prio = float(p.args[1])
+        for pid in pid_list_iter(p.args[0], sched):
+            prio = float(p.args[1])
+            sched.remove(pid)
+            sched.add(pid, prio)
     except ValueError:
-        p.error("pid, prio not given")
-    sched.remove(pid)
-    sched.add(pid, prio)
+        p.error("Invalid pid/prio")
     sched.save()
 
 def do_list(sched, p):
@@ -182,7 +222,7 @@ def do_list(sched, p):
         except IOError:
             return
 
-def do_killall(sched, p):
+def do_kill(sched, p):
     queue = []
 
     def _flush():
@@ -195,7 +235,7 @@ def do_killall(sched, p):
                 os.kill(pid, signal.SIGKILL)
         queue[:] = []
 
-    for pid, prio in sched.pids:
+    for pid in pid_list_iter(p.args, sched):
         os.kill(pid, signal.SIGTERM)
         os.kill(pid, signal.SIGCONT)
         queue.append(pid)
@@ -214,13 +254,8 @@ def do_killall(sched, p):
     sched._update()
 
 def do_tail(sched, p, base_cmd=['tail', '-f']):
-    pids = [pid for pid, prio in sched.pids]
-    if p.args:
-        try:
-            pids = [int(pid) for pid in p.args]
-        except ValueError:
-            p.error('one of PIDS is not a number')
-    
+    pids = list(pid_list_iter(p.args, sched))
+
     files = []
     for pid in pids:
         log_glob = os.path.join(sched.cfg['logdir'], '*.%d' % (pid,))
@@ -296,18 +331,22 @@ Process job controller, letting a limited number of jobs run at the same
 time.
     
 commands:
-  add PID             Add a PID to the schedule list
-  remove PID          Remove a PID from the schedule list
+  add PIDS            Add a PID to the schedule list
+  remove PIDS         Remove a PID from the schedule list
   list                List scheduled PIDs
   schedule            Perfom scheduling, starting/stopping processes
-  setprio PID PRIO    Set a priority for a PID
+  setprio PIDS PRIO   Set a priority for a PID
   run CMD             Run a command and put the process in the queue
   bg CMD              Run a command in the background and insert to queue
                       Redirect the output to a file in ~/.conjob.log/
-  killall             Kill all processes
+  kill PIDS           Kill processes; PIDS can also be 'all'.
+  tail PIDS           Tail -f logfiles of PIDS
+  less PIDS           Page through logfiles of PIDS
+
+'PIDS' can be a comma separated list of PIDs or PID ranges, or 'all'.
 """.strip()
-    
-    p = optparse.OptionParser("%prog [options] command [PIDS...]\n\n" + help)
+
+    p = optparse.OptionParser("%prog [options] command [...]\n\n" + help)
     p.add_option('-p', '--priority', action='store', type=str,
                  dest='priority', default=0,
                  help="Priority for the started process")
@@ -322,15 +361,15 @@ commands:
     cmds = dict(add=do_add,
                 schedule=do_schedule,
                 remove=do_remove,
+                rm=do_remove,
                 setprio=do_setprio,
                 list=do_list,
+                ls=do_list,
                 run=do_run,
                 bg=do_run_bg,
-                ls=do_list,
-                rm=do_remove,
                 tail=do_tail,
                 less=do_less,
-                killall=do_killall)
+                kill=do_kill)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
