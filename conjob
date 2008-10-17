@@ -4,90 +4,7 @@ import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob, re
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
-def _is_running(pid, accept_stopped=False):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/stat' % dr)
-        try:
-            x = f.read().split()
-            if accept_stopped:
-                return True
-            else:
-                return (x[2] != 'T')
-        finally:
-            f.close()
-    else:
-        return False
 
-def _mem_usage(pid):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/status' % dr)
-        try:
-            lines = f.read().split("\n")
-            for line in lines:
-                m = re.match(r'^VmSize:\s*(\d+) kB$', line)
-                if m:
-                    return float(m.group(1))
-        finally:
-            f.close()
-    return 0    
-
-def _total_mem():
-    f = open('/proc/meminfo', 'r')
-    try:
-        lines = f.read().split("\n")
-        for line in lines:
-            m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
-            if m:
-                return float(m.group(1))
-    finally:
-        f.close()
-    return 1e99
-
-def _get_loadavg():
-    f = open('/proc/loadavg', 'r')
-    try:
-        data = f.read()
-        return float(data.split()[0])
-    finally:
-        f.close()
-
-def _cmdline(pid):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/cmdline' % dr)
-        try:
-            cmdline = f.read().split("\0")
-            if cmdline[-1] == '':
-                cmdline.pop()
-            return cmdline
-        finally:
-            f.close()
-    else:
-        return []
-
-def _nice_cmdline(pid):
-    cmdline = _cmdline(pid)
-    for arg in (sys.argv[0], 'conjob'):
-        if arg in cmdline:
-            cmdline = cmdline[cmdline.index(arg)+2:]
-            break
-    if cmdline and cmdline[0].startswith('python2.'):
-        cmdline.pop(0)
-    return cmdline
-
-def _stop_process(pid):
-    os.kill(pid, signal.SIGSTOP)
-
-def _continue_process(pid):
-    os.kill(pid, signal.SIGCONT)
-
-def _set_ioprio(pid, ioprio=0):
-    """
-    Set IO priority
-    """
-    os.system('ionice -p %d -n %d' % (pid, ioprio))
 
 class PidScheduler(object):
     def __init__(self, filename):
@@ -183,8 +100,9 @@ class PidScheduler(object):
         to_run = self.pids[:nprocs]
         to_stop = self.pids[nprocs:]
 
-        for pid, prio in to_run:
+        for cpu, (pid, prio) in enumerate(to_run):
             _continue_process(pid)
+            _set_cpu_affinity(pid, cpu % _ncpus())
 
         for pid, prio in to_stop:
             _stop_process(pid)
@@ -419,6 +337,109 @@ commands:
         p.error("Unknown command %s" % cmd)
     else:
         func(sched, p)
-    
+
+#------------------------------------------------------------------------------
+# Extra system routines
+#------------------------------------------------------------------------------
+
+def _is_running(pid, accept_stopped=False):
+    dr = '/proc/%d' % pid
+    if os.path.isdir(dr):
+        f = open('%s/stat' % dr)
+        try:
+            x = f.read().split()
+            if accept_stopped:
+                return True
+            else:
+                return (x[2] != 'T')
+        finally:
+            f.close()
+    else:
+        return False
+
+def _mem_usage(pid):
+    dr = '/proc/%d' % pid
+    if os.path.isdir(dr):
+        f = open('%s/status' % dr)
+        try:
+            lines = f.read().split("\n")
+            for line in lines:
+                m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                if m:
+                    return float(m.group(1))
+        finally:
+            f.close()
+    return 0    
+
+def _total_mem():
+    f = open('/proc/meminfo', 'r')
+    try:
+        lines = f.read().split("\n")
+        for line in lines:
+            m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
+            if m:
+                return float(m.group(1))
+    finally:
+        f.close()
+    return 1e99
+
+def _get_loadavg():
+    f = open('/proc/loadavg', 'r')
+    try:
+        data = f.read()
+        return float(data.split()[0])
+    finally:
+        f.close()
+
+def _cmdline(pid):
+    dr = '/proc/%d' % pid
+    if os.path.isdir(dr):
+        f = open('%s/cmdline' % dr)
+        try:
+            cmdline = f.read().split("\0")
+            if cmdline[-1] == '':
+                cmdline.pop()
+            return cmdline
+        finally:
+            f.close()
+    else:
+        return []
+
+def _nice_cmdline(pid):
+    cmdline = _cmdline(pid)
+    for arg in (sys.argv[0], 'conjob'):
+        if arg in cmdline:
+            cmdline = cmdline[cmdline.index(arg)+2:]
+            break
+    if cmdline and cmdline[0].startswith('python2.'):
+        cmdline.pop(0)
+    return cmdline
+
+def _ncpus():
+    f = open('/proc/cpuinfo', 'r')
+    try:
+        ncpus = 0
+        for line in f:
+            if line.startswith('processor'):
+                ncpus += 1
+        return ncpus
+    finally:
+        f.close()
+
+def _stop_process(pid):
+    os.kill(pid, signal.SIGSTOP)
+
+def _continue_process(pid):
+    os.kill(pid, signal.SIGCONT)
+
+def _set_ioprio(pid, ioprio=0):
+    """
+    Set IO priority
+    """
+    os.system('ionice -p %d -n %d' % (pid, ioprio))
+
+def _set_cpu_affinity(pid, cpu):
+    os.system('schedtool -a %d %d' % (cpu, pid))
+
 if __name__ == "__main__":
     main(sys.argv[1:])
