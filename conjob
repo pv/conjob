@@ -233,7 +233,7 @@ def do_kill(sched, p):
         for pid2 in queue:
             if _is_running(pid2):
                 os.kill(pid, signal.SIGKILL)
-        queue[:] = []
+        del queue[:]
 
     for pid in pid_list_iter(p.args, sched):
         os.kill(pid, signal.SIGTERM)
@@ -241,7 +241,7 @@ def do_kill(sched, p):
         queue.append(pid)
 
         # clean
-        time.sleep(0.01)
+        time.sleep(0.05)
         for pid2 in queue:
             if not _is_running(pid2):
                 queue.remove(pid2)
