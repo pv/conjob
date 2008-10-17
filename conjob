@@ -213,7 +213,7 @@ def do_killall(sched, p):
     _flush()
     sched._update()
 
-def do_tail(sched, p):
+def do_tail(sched, p, base_cmd=['tail', '-f']):
     pids = [pid for pid, prio in sched.pids]
     if p.args:
         try:
@@ -236,9 +236,12 @@ def do_tail(sched, p):
         print "    " + f.readline(),
         f.close()
     print "-"*79
-
-    cmd = ['tail', '-f'] + files
+    
+    cmd = base_cmd + files
     os.execvp(cmd[0], cmd)
+
+def do_less(sched, p):
+    do_tail(sched, p, ['less', '+k'])
 
 def do_run(sched, p):
     sched.add(os.getpid(), p.options.priority)
@@ -326,6 +329,7 @@ commands:
                 ls=do_list,
                 rm=do_remove,
                 tail=do_tail,
+                less=do_less,
                 killall=do_killall)
 
     cmd = args.pop(0)
