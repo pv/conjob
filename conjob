@@ -259,7 +259,10 @@ def do_tail(sched, p, base_cmd=['tail', '-f']):
     files = []
     for pid in pids:
         log_glob = os.path.join(sched.cfg['logdir'], '*.%d' % (pid,))
-        files.extend(glob.glob(log_glob))
+        new_files = glob.glob(log_glob)
+        new_files.sort(key=lambda fn: os.stat(fn).st_mtime)
+        if new_files:
+            files.append(new_files[-1])
 
     if not files:
         print "No files to tail"
