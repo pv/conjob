@@ -1,17 +1,92 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
-import os, sys, time, optparse, signal, configobj, tempfile, shutil, glob, re
+import os, sys, time, optparse, signal, tempfile, shutil, glob, re
+import configobj
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
+class Job(object):
+    """
+    Representation of a pending or running job.
 
+    """
+    date_format = '%Y-%m-%d %H:%M:%S'
+
+    def __init__(self, jid, cmd):
+        self.jid = jid
+        self.process = None
+        self.cmd = cmd
+        self.log_file = None
+        self.completed = False
+        self.queue_time = datetime.datetime.now()
+        self.start_time = None
+        self.priority = 0.
+
+    @classmethod
+    def from_section(cls, section):
+        self = Job(None, None)
+        self.jid = str(section['jid'])
+        pid = section.get('pid', None)
+        if pid is not None:
+            self.process = Process(pid)
+            if not self.process.is_alive:
+                self.process = None
+        else:
+            self.process = None
+        self.cmd = section['cmd']
+        self.log_file = section['log_file']
+        self.completed = bool(section.get('completed', False))
+        if 'start_time' in section:
+            self.start_time = datetime.datetime.strptime(section['start_time'],
+                                                         self.date_format)
+        self.queue_time = datetime.datetime.strptime(section['queue_time'],
+                                                     self.date_format)
+        self.priority = float(section.get('priority', 0.))
+
+    def as_section(self):
+        section = {}
+        section['jid'] = self.jid
+        if self.process is not None:
+            section['pid'] = self.process.pid
+        if self.start_time is not None:
+            section['start_time'] = self.start.time
+        section['cmd'] = self.cmd
+        section['log_file'] = self.log_file
+        if self.completed:
+            section['completed'] = True
+        if self.start_time:
+            section['start_time'] = self.start_time.strftime(self.date_format)
+        section['queue_time'] = self.queue_time.strftime(self.date_format)
+        section['priority'] = self.priority
+        return section
+
+    @property
+    def active(self):
+        return (self.process is not None)
+
+    def kill(self):
+        if self.active and self.process.is_alive:
+            self.process.kill()
+        self.completed = True
+        self.process = None
+
+    def run(self):
+        if self.completed:
+            return
+        if self.active:
+            if not self.process.is_running:
+                self.process.cont()
+            return
+
+        
+        
 
 class PidScheduler(object):
     def __init__(self, filename):
-        self.pids = []
+        self.jobs = []
         self.cfg = configobj.ConfigObj(filename)
         self.cfg.setdefault('logdir', filename + '.log')
-        self.cfg.setdefault('pidlist', filename + '.pids')
+        self.cfg.setdefault('joblist', filename + '.jobs')
         self.cfg.setdefault('nprocs', 2)
         self.cfg.setdefault('nice', 10)
         self.cfg.setdefault('ioprio', 7)
@@ -24,20 +99,15 @@ class PidScheduler(object):
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
         self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
-        self.load_pids()
+        self.load_jobs()
 
         if not os.path.isdir(self.cfg['logdir']):
             os.makedirs(self.cfg['logdir'])
     
-    def load_pids(self):
-        cfg = configobj.ConfigObj(self.cfg['pidlist'])
+    def load_jobs(self):
+        cfg = configobj.ConfigObj(self.cfg['joblist'])
         for key, value in cfg.iteritems():
-            try:
-                pid = int(key)
-                priority = float(value)
-                self.pids.append((pid, priority))
-            except ValueError:
-                continue
+            self.jobs.append(Job.from_section(value))
 
     def save_pids(self):
         # avoid write races by writing to a temp file and overwriting
@@ -47,33 +117,33 @@ class PidScheduler(object):
                 dir=os.path.dirname(self.cfg['pidlist']))
         cfg = configobj.ConfigObj()
         cfg.filename = tmp_fn
-        for pid, prio in self.pids:
-            cfg[str(pid)] = prio
+        for job in self.jobs:
+            cfg[job.jid] = job.as_section()
         cfg.write()
         shutil.move(tmp_fn, self.cfg['pidlist'])
+
+    def next_jid(self):
+        imax = max([job.jid for job in self.jobs])
+        return "%d" % (imax+1)
 
     def save(self):
         self.save_pids()
     
-    def add(self, pid, prio):
-        for i, (key, value) in enumerate(self.pids):
-            if key == pid:
-                self.pids[i] = (pid, prio)
-                return
-        self.pids.append((pid, prio))
+    def add(self, cmd):
+        self.jobs.append(Job(self.next_jid(), cmd))
 
-    def remove(self, pid):
-        vals = [z for z in self.pids if z[0] == pid]
-        if vals:
-            for v in vals:
-                self.pids.remove(v)
+    def kill(self, job):
+        job.kill()
+        self.jobs.remove(job)
 
     def _update(self):
-        self.pids = [z for z in self.pids if _is_running(z[0], True)]
+        for job in self.jobs:
+            if job.process and not job.process.is_alive():
+                job.completed = True
 
     def schedule(self):
         def _cmp_prio(a, b):
-            return cmp(a[1], b[1])
+            return cmp(a.priority, b.priority)
 
         # Check status
         self._update()
@@ -83,15 +153,19 @@ class PidScheduler(object):
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
-        running = len([z for z in self.pids if _is_running(z[0])])
-        max_nprocs = running + int(round(self.cfg['loadavg'] - _get_loadavg()))
+        running = len([z for z in self.jobs if z.active])
+        max_nprocs = running + int(round(self.cfg['loadavg']
+                                         - Process.get_loadavg()))
         max_nprocs = max(1, max_nprocs)
         nprocs = min(nprocs, max_nprocs)
 
         # Adjust according to memory usage
         mem_max = _total_mem() * self.cfg['max_mem_percentage'] / 100.
-        for j, (pid, prio) in enumerate(self.pids[:nprocs]):
-            mem_max -= _mem_usage(pid)
+        for j, job in enumerate(self.jobs[:nprocs]):
+            if job.active:
+                mem_max -= job.process.mem_used
+            else:
+                mem_max -= 0.05 * _total_mem()
             if mem_max < 0 and j > 0:
                 nprocs = j
                 break
@@ -385,107 +459,150 @@ commands:
         func(sched, p)
 
 #------------------------------------------------------------------------------
-# Extra system routines
+# Controlling processes
 #------------------------------------------------------------------------------
 
-def _is_running(pid, accept_stopped=False):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/stat' % dr)
+class Process(object):
+    def __init__(self, pid):
+        self.pid = pid
+
+    def kill(self):
+        os.kill(self.pid, signal.SIGTERM)
+
+    def stop(self):
+        os.kill(self.pid, signal.SIGSTOP)
+
+    def cont(self):
+        os.kill(self.pid, signal.SIGCONT)
+
+    @property
+    def mem_used(self):
+        dr = '/proc/%d' % self.pid
+        if os.path.isdir(dr):
+            f = open('%s/status' % dr)
+            try:
+                lines = f.read().split("\n")
+                for line in lines:
+                    m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                    if m:
+                        return float(m.group(1))
+            finally:
+                f.close()
+        return 0
+
+    @property
+    def is_running(self, accept_stopped=False):
+        dr = '/proc/%d' % self.pid
+        if os.path.isdir(dr):
+            f = open('%s/stat' % dr)
+            try:
+                x = f.read().split()
+                if accept_stopped:
+                    return True
+                else:
+                    return (x[2] != 'T')
+            finally:
+                f.close()
+        else:
+            return False
+
+    @property
+    def is_alive(self):
+        return os.path.isdir('/proc/%d' % self.pid)
+
+    def set_ioprio(self, ioprio=0):
+        """Set IO priority"""
+        os.system('ionice -p %d -n %d' % (self.pid, ioprio))
+
+    def set_cpu_affinity(self, cpu=0):
+        os.system('schedtool -a %d %d' % (cpu, self.pid))
+
+    @staticmethod
+    def get_loadavg():
+        f = open('/proc/loadavg', 'r')
         try:
-            x = f.read().split()
-            if accept_stopped:
-                return True
-            else:
-                return (x[2] != 'T')
+            data = f.read()
+            return float(data.split()[0])
         finally:
             f.close()
-    else:
-        return False
 
-def _mem_usage(pid):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/status' % dr)
+    @staticmethod
+    def get_ncpus():
+        f = open('/proc/cpuinfo', 'r')
+        try:
+            ncpus = 0
+            for line in f:
+                if line.startswith('processor'):
+                    ncpus += 1
+            return ncpus
+        finally:
+            f.close()
+
+    @staticmethod
+    def get_total_mem():
+        f = open('/proc/meminfo', 'r')
         try:
             lines = f.read().split("\n")
             for line in lines:
-                m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
                 if m:
                     return float(m.group(1))
         finally:
             f.close()
-    return 0    
+        return 1e99
 
-def _total_mem():
-    f = open('/proc/meminfo', 'r')
-    try:
-        lines = f.read().split("\n")
-        for line in lines:
-            m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
-            if m:
-                return float(m.group(1))
-    finally:
-        f.close()
-    return 1e99
+    @classmethod
+    def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None):
+        (pid_pipe_r, pid_pipe_w) = os.pipe()
 
-def _get_loadavg():
-    f = open('/proc/loadavg', 'r')
-    try:
-        data = f.read()
-        return float(data.split()[0])
-    finally:
-        f.close()
 
-def _cmdline(pid):
-    dr = '/proc/%d' % pid
-    if os.path.isdir(dr):
-        f = open('%s/cmdline' % dr)
-        try:
-            cmdline = f.read().split("\0")
-            if cmdline[-1] == '':
-                cmdline.pop()
-            return cmdline
-        finally:
-            f.close()
-    else:
-        return []
+        # p = conjob.Process.fork_to_background(['ls', '/'], '/tmp/foo.log.1')
+        
+        # 1st fork
+        pid = os.fork()
+        if pid > 0:
+            # parent
+            pid = int(os.read(pid_pipe_r, 64))
+            os.close(pid_pipe_r)
+            os.close(pid_pipe_w)
+            return cls(pid)
 
-def _nice_cmdline(pid):
-    cmdline = _cmdline(pid)
-    for arg in (sys.argv[0], 'conjob'):
-        if arg in cmdline:
-            cmdline = cmdline[cmdline.index(arg)+2:]
-            break
-    if cmdline and cmdline[0].startswith('python2.'):
-        cmdline.pop(0)
-    return cmdline
+        # invoke in background
+        os.setsid()
 
-def _ncpus():
-    f = open('/proc/cpuinfo', 'r')
-    try:
-        ncpus = 0
-        for line in f:
-            if line.startswith('processor'):
-                ncpus += 1
-        return ncpus
-    finally:
-        f.close()
+        # 2nd fork to remove session leader status
+        pid = os.fork()
+        if pid > 0:
+            # dummy parent
+            sys.exit(0)
 
-def _stop_process(pid):
-    os.kill(pid, signal.SIGSTOP)
+        self = cls(os.getpid())
+        os.write(pid_pipe_w, '%d\n' % self.pid)
+        os.close(pid_pipe_r)
+        os.close(pid_pipe_w)
 
-def _continue_process(pid):
-    os.kill(pid, signal.SIGCONT)
+        # redirect output + close input
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if isinstance(logfile, str):
+            logfile = open(logfile, 'a')
+        f = logfile
+        f2 = open(os.devnull, 'r')
+        os.dup2(f2.fileno(), sys.stdin.fileno())
+        os.dup2(f.fileno(), sys.stdout.fileno())
+        os.dup2(f.fileno(), sys.stderr.fileno())
 
-def _set_ioprio(pid, ioprio=0):
-    """
-    Set IO priority
-    """
-    os.system('ionice -p %d -n %d' % (pid, ioprio))
+        # renice
+        if nice:
+            os.nice(nice)
+        if ioprio:
+            self.set_ioprio(ioprio)
 
-def _set_cpu_affinity(pid, cpu):
-    os.system('schedtool -a %d %d' % (cpu, pid))
+        # stop and run
+        self.stop()
+        os.execvp(cmd[0], cmd)
+        raise RuntimeError("Failed to execute command '%s'" % cmd)
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
