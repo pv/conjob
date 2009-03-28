@@ -17,6 +17,7 @@ commands:
   tail JIDS           Tail -f logfiles
   less JIDS           Page through logfiles
   cleanup JIDS        Remove completed jobs from the job list
+  requeue JIDS        Kill and re-queue given jobs
 
 'JIDS' can be a comma separated list of JIDs, or a shell glob pattern.
 The syntax '{MIN-MAX}' matches all integers from MIN to MAX.
@@ -72,7 +73,7 @@ class Job(object):
     def as_section(self):
         section = {}
         section['jid'] = self.jid
-        if self.process is not None:
+        if self.process is not None and self.process.is_alive:
             section['pid'] = self.process.pid
         if self.start_time is not None:
             section['start_time'] = self.start_time
@@ -86,24 +87,27 @@ class Job(object):
         section['priority'] = self.priority
         return section
 
-    def kill(self):
+    def kill(self, signal=None):
         if self.process and self.process.is_alive:
-            self.process.kill()
+            self.process.kill(signal)
             self.process.resume()
-        self.end_time = datetime.datetime.now()
-        self.process = None
+        if self.end_time is None:
+            self.end_time = datetime.datetime.now()
 
-    def kill_and_reset(self):
-        self.kill()
+    def reset(self):
         self.start_time = None
         self.end_time = None
 
+    def resume(self):
+        if self.is_alive:
+            self.process.resume()
+
     def suspend(self):
-        if self.process and self.process.is_alive:
+        if self.is_alive:
             self.process.suspend()
 
     def set_cpu_affinity(self, cpu):
-        if self.process and self.process.is_alive:
+        if self.is_alive:
             self.process.set_cpu_affinity(cpu)
 
     def run(self, nice=None, ioprio=None):
@@ -122,7 +126,12 @@ class Job(object):
 
     @property
     def is_alive(self):
+        self._update_alive_state()
         return (self.process is not None)
+
+    def _update_alive_state(self):
+        if self.process and not self.process.is_alive:
+            self.process = None
 
     @property
     def is_running(self):
@@ -137,6 +146,12 @@ class Job(object):
     @property
     def started(self):
         return (self.start_time is not None)
+
+    @property
+    def pid(self):
+        if not self.process:
+            return None
+        return self.process.pid
 
     def __repr__(self):
         return "<Job %s: %s>" % (self.jid, " ".join(self.cmd))
@@ -363,9 +378,9 @@ def do_list(sched, p):
 
     for job in sched.jobs_iter(p.args):
         if job.is_running:
-            mark = "*"
+            mark = "* %d" % job.process.pid
         elif job.is_alive:
-            mark = "-"
+            mark = "- %d"  % job.process.pid
         elif job.started and not job.completed and not job.is_alive:
             mark = "/"
         else:
@@ -373,47 +388,23 @@ def do_list(sched, p):
             
         cmdline = ' '.join(job.cmd)
         try:
-            print "%8s%s  %.2g  %s" % (job.jid, mark, job.priority, cmdline)
+            print "%8s%-8s  %.2g  %s" % (job.jid, mark, job.priority, cmdline)
         except IOError:
             return
 
 def do_kill(sched, p):
-    queue = []
-
-    def _flush():
-        for k in xrange(100):
-            for process in queue:
-                if process.is_alive:
-                    break
-            time.sleep(0.05)
-        for process in queue:
-            if process.is_alive:
-                process.kill(signal.SIGKILL)
-        del queue[:]
-
+    watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
     for job in sched.jobs_iter(p.args):
-        process = job.process
-        job.kill()
+        watch.kill(job)
+    watch.flush()
+    sched.save_jobs()
 
-        if not process:
-            continue
-
-        # ensure that the process is really finally killed
-        # so that we won't end up with a large number of resumed
-        # processes running at the same time
-        queue.append(process)
-
-        # clean
-        time.sleep(0.05)
-        for process in list(queue):
-            if not process.is_alive:
-                queue.remove(process)
-
-        # check if forcing flush is needed
-        if len(queue) > 1 + sched.cfg['nprocs']//2:
-            _flush()
-    
-    _flush()
+def do_requeue(sched, p):
+    watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
+    for job in sched.jobs_iter(p.args):
+        watch.kill(job)
+        job.reset()
+    watch.flush()
     sched.save_jobs()
 
 def do_tail(sched, p, base_cmd=['tail', '-f']):
@@ -478,7 +469,8 @@ def main(argv):
                 tail=do_tail,
                 less=do_less,
                 kill=do_kill,
-                cleanup=do_cleanup)
+                cleanup=do_cleanup,
+                requeue=do_requeue)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
@@ -498,7 +490,9 @@ class Process(object):
     def __init__(self, pid):
         self.pid = pid
 
-    def kill(self, sig=signal.SIGTERM):
+    def kill(self, sig=None):
+        if sig is None:
+            sig = signal.SIGTERM
         os.kill(self.pid, sig)
 
     def suspend(self):
@@ -652,6 +646,47 @@ class Process(object):
 
     def __repr__(self):
         return "<Process %d>" % self.pid
+
+class KillWatch(object):
+    def __init__(self, nprocs):
+        self.queue = []
+        self.nprocs = nprocs
+
+    def mass_kill(self, processes):
+        for process in processes:
+            self.kill(process)
+
+    def kill(self, process):
+        process.kill()
+        if not process.is_alive:
+            return
+
+        self.queue.append(process)
+        process.resume()
+
+        time.sleep(0.05)
+        for process in list(self.queue):
+            if not process.is_alive:
+                self.queue.remove(process)
+
+        if len(self.queue) > self.nprocs:
+            self.flush()
+
+    def flush(self):
+        for k in xrange(100):
+            alive = False
+            for process in self.queue:
+                if process.is_alive:
+                    alive = True
+                    break
+            if not alive:
+                break
+            time.sleep(0.05)
+        for process in self.queue:
+            if process.is_alive:
+                process.kill(signal.SIGKILL)
+        del self.queue[:]
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
