@@ -1,7 +1,7 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
 """
-conjob [options] command [...]\n\n
+conjob [options] command [...]
 
 Process job controller, letting a limited number of jobs run at the same
 time.
@@ -291,11 +291,13 @@ class PidScheduler(object):
     def jobs_iter(self, listspec, only_pending=True):
         if isinstance(listspec, str) and listspec.startswith('%'):
             listspec = listspec[1:]
+            if not listspec:
+                listspec = 'all'
             only_pending = False
 
         if not isinstance(listspec, str):
             for item in listspec:
-                for job in self.jobs_iter(item):
+                for job in self.jobs_iter(item, only_pending):
                     yield job
         elif listspec == 'all':
             for job in self.jobs:
@@ -303,7 +305,7 @@ class PidScheduler(object):
                     yield job
         elif ',' in listspec:
             items = [x.strip() for x in listspec.split(',')]
-            for job in self.jobs_iter(items):
+            for job in self.jobs_iter(items, only_pending):
                 yield job
         elif '{' in listspec:
             pat = re.compile(r'{(\d+)-(\d+)}')
@@ -443,6 +445,8 @@ def do_run_bg(sched, p):
     sched.save_jobs()
 
 def do_cleanup(sched, p):
+    if not p.args:
+        p.args = ['all']
     to_remove = [x for x in sched.jobs_iter(p.args, only_pending=False)
                  if x.completed]
     for job in to_remove:
