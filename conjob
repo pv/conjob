@@ -263,9 +263,11 @@ class PidScheduler(object):
     def _update(self):
         to_remove = []
         for job in self.jobs:
-            if job.start_time and not job.is_alive:
+            if job.started and not job.is_alive and not job.completed:
+                # the job has finished
                 job.end_time = datetime.datetime.now()
             if job.completed and not job.started:
+                # the job was never run, probably killed
                 to_remove.append(job)
         for job in to_remove:
             self.jobs.remove(job)
