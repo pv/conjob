@@ -1,6 +1,30 @@
 #!/usr/bin/env python2.5
 # -*-python-*-
-import os, sys, time, optparse, signal, tempfile, shutil, glob, re
+"""
+conjob [options] command [...]\n\n
+
+Process job controller, letting a limited number of jobs run at the same
+time.
+
+commands:
+  list                List scheduled PIDs
+  schedule            Perfom scheduling, starting/stopping processes
+  setprio JIDS PRIO   Set a priority for a PID
+  run CMD             Run a command and put the process in the queue
+  bg CMD              Run a command in the background and insert to queue
+                      Redirect the output to a file in ~/.conjob.log/
+  kill JIDS           Kill jobs
+  tail JIDS           Tail -f logfiles
+  less JIDS           Page through logfiles
+  cleanup JIDS        Remove completed jobs from the job list
+
+'JIDS' can be a comma separated list of JIDs, or a shell glob pattern.
+The syntax '{MIN-MAX}' matches all integers from MIN to MAX.
+Prepending '%' to the pattern makes it match also completed jobs.
+
+"""
+import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
+import datetime, subprocess
 import configobj
 
 CFGFILE = os.path.expanduser("~/.conjob")
@@ -12,36 +36,38 @@ class Job(object):
     """
     date_format = '%Y-%m-%d %H:%M:%S'
 
-    def __init__(self, jid, cmd):
+    def __init__(self, jid, cmd, log_file):
         self.jid = jid
         self.process = None
         self.cmd = cmd
-        self.log_file = None
-        self.completed = False
+        self.log_file = log_file
+        self.end_time = None
         self.queue_time = datetime.datetime.now()
         self.start_time = None
         self.priority = 0.
 
     @classmethod
+    def _strptime(cls, s):
+        return datetime.datetime.strptime(s, cls.date_format)
+
+    @classmethod
     def from_section(cls, section):
-        self = Job(None, None)
+        self = Job(None, None, None)
         self.jid = str(section['jid'])
         pid = section.get('pid', None)
         if pid is not None:
-            self.process = Process(pid)
+            self.process = Process(int(pid))
             if not self.process.is_alive:
                 self.process = None
-        else:
-            self.process = None
         self.cmd = section['cmd']
         self.log_file = section['log_file']
-        self.completed = bool(section.get('completed', False))
+        if 'end_time' in section:
+            self.end_time = cls._strptime(section['end_time'])
         if 'start_time' in section:
-            self.start_time = datetime.datetime.strptime(section['start_time'],
-                                                         self.date_format)
-        self.queue_time = datetime.datetime.strptime(section['queue_time'],
-                                                     self.date_format)
+            self.start_time = cls._strptime(section['start_time'])
+        self.queue_time = cls._strptime(section['queue_time'])
         self.priority = float(section.get('priority', 0.))
+        return self
 
     def as_section(self):
         section = {}
@@ -49,37 +75,72 @@ class Job(object):
         if self.process is not None:
             section['pid'] = self.process.pid
         if self.start_time is not None:
-            section['start_time'] = self.start.time
+            section['start_time'] = self.start_time
         section['cmd'] = self.cmd
         section['log_file'] = self.log_file
-        if self.completed:
-            section['completed'] = True
+        if self.end_time:
+            section['end_time'] = self.end_time.strftime(self.date_format)
         if self.start_time:
             section['start_time'] = self.start_time.strftime(self.date_format)
         section['queue_time'] = self.queue_time.strftime(self.date_format)
         section['priority'] = self.priority
         return section
 
-    @property
-    def active(self):
-        return (self.process is not None)
-
     def kill(self):
-        if self.active and self.process.is_alive:
+        if self.process and self.process.is_alive:
             self.process.kill()
-        self.completed = True
+            self.process.resume()
+        self.end_time = datetime.datetime.now()
         self.process = None
 
-    def run(self):
+    def kill_and_reset(self):
+        self.kill()
+        self.start_time = None
+        self.end_time = None
+
+    def suspend(self):
+        if self.process and self.process.is_alive:
+            self.process.suspend()
+
+    def set_cpu_affinity(self, cpu):
+        if self.process and self.process.is_alive:
+            self.process.set_cpu_affinity(cpu)
+
+    def run(self, nice=None, ioprio=None):
         if self.completed:
             return
-        if self.active:
+        if self.process:
             if not self.process.is_running:
-                self.process.cont()
+                self.process.resume()
             return
 
-        
-        
+        self.start_time = datetime.datetime.now()
+
+        self.process = Process.fork_to_background(self.cmd, self.log_file,
+                                                  ioprio=ioprio, nice=nice,
+                                                  msg="Job %s" % self.jid)
+
+    @property
+    def is_alive(self):
+        return (self.process is not None)
+
+    @property
+    def is_running(self):
+        if self.process is None:
+            return False
+        return self.process.is_running
+
+    @property
+    def completed(self):
+        return (self.end_time is not None)
+
+    @property
+    def started(self):
+        return (self.start_time is not None)
+
+    def __repr__(self):
+        return "<Job %s: %s>" % (self.jid, " ".join(self.cmd))
+
 
 class PidScheduler(object):
     def __init__(self, filename):
@@ -103,34 +164,70 @@ class PidScheduler(object):
 
         if not os.path.isdir(self.cfg['logdir']):
             os.makedirs(self.cfg['logdir'])
-    
+
     def load_jobs(self):
         cfg = configobj.ConfigObj(self.cfg['joblist'])
         for key, value in cfg.iteritems():
             self.jobs.append(Job.from_section(value))
 
-    def save_pids(self):
+    def save_jobs(self):
         # avoid write races by writing to a temp file and overwriting
         # by moving (which probably is atomic within a FS)
         fd, tmp_fn = tempfile.mkstemp(
-                prefix=os.path.basename(self.cfg['pidlist']),
-                dir=os.path.dirname(self.cfg['pidlist']))
+                prefix=os.path.basename(self.cfg['joblist']),
+                dir=os.path.dirname(self.cfg['joblist']))
         cfg = configobj.ConfigObj()
         cfg.filename = tmp_fn
         for job in self.jobs:
             cfg[job.jid] = job.as_section()
         cfg.write()
-        shutil.move(tmp_fn, self.cfg['pidlist'])
+        shutil.move(tmp_fn, self.cfg['joblist'])
 
-    def next_jid(self):
-        imax = max([job.jid for job in self.jobs])
-        return "%d" % (imax+1)
+    def get_free_jid(self, prefix=""):
+        if prefix:
+            prefix = prefix + "-"
+        else:
+            prefix = ""
+        def int_prefix(s):
+            if not prefix:
+                try: return int(s)
+                except ValueError: return None
+            else:
+                if not s.startswith(prefix + '-'): return None
+                try: return int(s[len(prefix)+1:])
+                except ValueError: return None
+        imax = max([int_prefix(job.jid) for job in self.jobs
+                    if int_prefix(job.jid) is not None] + [0])
+        return "%s%d" % (prefix, imax+1)
+
+    def get_logfile_name(self, jid, timestamp=None):
+        if timestamp is None:
+            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+        logfile_fn = os.path.join(self.cfg['logdir'],
+                                  '%s.%s' % (jid, timestamp))
+        return logfile_fn
 
     def save(self):
         self.save_pids()
-    
-    def add(self, cmd):
-        self.jobs.append(Job(self.next_jid(), cmd))
+
+    def add(self, cmd, prefix=None, priority=0.):
+        jid = self.get_free_jid(prefix)
+        logfile = self.get_logfile_name(jid)
+        job = Job(jid, cmd, logfile)
+        job.priority = priority
+        self.jobs.append(job)
+        return job
+
+    def add_fg_and_save(self, cmd, prefix=None, priority=0.):
+        job = self.add(cmd, prefix=prefix, priority=priority)
+        job.process = Process(os.getpid())
+        job.start_time = datetime.datetime.now()
+        self.save_jobs()
+        Process.exec_cmd(cmd,
+                         nice=self.cfg['nice'],
+                         ioprio=self.cfg['ioprio'],
+                         stop=True,
+                         msg="Job %s" % job.jid)
 
     def kill(self, job):
         job.kill()
@@ -138,8 +235,8 @@ class PidScheduler(object):
 
     def _update(self):
         for job in self.jobs:
-            if job.process and not job.process.is_alive():
-                job.completed = True
+            if job.start_time and not job.is_alive:
+                job.end_time = datetime.datetime.now()
 
     def schedule(self):
         def _cmp_prio(a, b):
@@ -149,150 +246,132 @@ class PidScheduler(object):
         self._update()
 
         # Sort
-        self.pids.sort(_cmp_prio, reverse=True)
+        queue = [x for x in self.jobs if not x.completed]
+        queue.sort(_cmp_prio, reverse=True)
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
-        running = len([z for z in self.jobs if z.active])
+        running = len([z for z in queue if z.is_alive])
         max_nprocs = running + int(round(self.cfg['loadavg']
                                          - Process.get_loadavg()))
         max_nprocs = max(1, max_nprocs)
         nprocs = min(nprocs, max_nprocs)
 
         # Adjust according to memory usage
-        mem_max = _total_mem() * self.cfg['max_mem_percentage'] / 100.
-        for j, job in enumerate(self.jobs[:nprocs]):
-            if job.active:
+        total_mem = Process.get_total_mem()
+        mem_max = total_mem * self.cfg['max_mem_percentage'] / 100.
+        for j, job in enumerate(queue[:nprocs]):
+            if job.is_alive:
                 mem_max -= job.process.mem_used
             else:
-                mem_max -= 0.05 * _total_mem()
+                mem_max -= 0.05 * total_mem
             if mem_max < 0 and j > 0:
                 nprocs = j
                 break
 
         # Stop / continue
-        to_run = self.pids[:nprocs]
-        to_stop = self.pids[nprocs:]
+        to_run = queue[:nprocs]
+        to_stop = queue[nprocs:]
 
-        for cpu, (pid, prio) in enumerate(to_run):
-            _continue_process(pid)
-            _set_cpu_affinity(pid, cpu % _ncpus())
+        resumed = False
 
-        for pid, prio in to_stop:
-            _stop_process(pid)
+        for cpu, job in enumerate(to_run):
+            if not job.is_running and not resumed:
+                # only resume one job per schedule cycle
+                job.run(nice=self.cfg['nice'], ioprio=self.cfg['ioprio'])
+                resumed = True
+            job.set_cpu_affinity(cpu)
 
-        self.save_pids()
+        for job in to_stop:
+            job.suspend()
 
-    def logfile(self, pid, timestamp=None):
-        if not _is_running(pid, True):
-            return None
-        
-        if timestamp is None:
-            timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
+        self._update()
+        self.save_jobs()
 
-        cmdline = _nice_cmdline(pid)
-        
-        if cmdline:
-            cmd = os.path.basename(cmdline[0])
+    def jobs_iter(self, listspec, only_pending=True):
+        if isinstance(listspec, str) and listspec.startswith('%'):
+            listspec = listspec[1:]
+            only_pending = False
+
+        if not isinstance(listspec, str):
+            for item in listspec:
+                for job in self.jobs_iter(item):
+                    yield job
+        elif listspec == 'all':
+            for job in self.jobs:
+                if not only_pending or not job.completed:
+                    yield job
+        elif ',' in listspec:
+            items = [x.strip() for x in listspec.split(',')]
+            for job in self.jobs_iter(items):
+                yield job
+        elif '{' in listspec:
+            pat = re.compile(r'{(\d+)-(\d+)}')
+            ms = list(pat.finditer(listspec))
+            if not ms:
+                return
+            limits = [(int(m.group(1)), int(m.group(2))) for m in ms]
+
+            offset = 0
+            spec2 = listspec
+            for k, m in enumerate(ms):
+                rep = '<<INDEX>>'
+                spec2 = spec2[:offset+m.start()] + rep + spec2[offset+m.end():]
+                offset += len(rep) - (m.end() - m.start())
+
+            pat = "^" + fnmatch.translate(spec2)
+            pat = pat.replace(r'\<\<INDEX\>\>', '(\d+)')
+            pat = re.compile(pat)
+
+            for job in self.jobs:
+                jm = pat.match(job.jid)
+                if jm:
+                    ints = map(int, jm.groups())
+                    ok = True
+                    for k, (min, max) in zip(ints, limits):
+                        if not min <= k <= max:
+                            ok = False
+                            break
+                    if ok:
+                        yield job
         else:
-            cmd = 'log'
-            
-        logfile_fn = os.path.join(
-            self.cfg['logdir'], '%s.%s.%d' % (cmd, timestamp, pid))
-        
-        if not os.path.isfile(logfile_fn):
-            f = open(logfile_fn, 'w')
-            hdr = "%s\n%s\n%s\n%s\n" % (' '.join(cmdline), timestamp,
-                                        os.getcwd(), "-"*79)
-            f.write(hdr)
-            f.close()
-        
-        f = open(logfile_fn, 'a')
-        return f
-
-def pid_list_iter(listspec, in_sched=None):
-    if not isinstance(listspec, str):
-        for item in listspec:
-            for pid in pid_list_iter(item, in_sched):
-                yield pid
-        return
-    
-    if listspec == 'all':
-        if in_sched is not None:
-            for pid, prio in in_sched.pids:
-                yield pid
-            return
-        else:
-            raise ValueError()
-    
-    if in_sched is None:
-        def check_pid(j):
-            pass
-    else:
-        valid_pids = {}
-        for pid, prio in in_sched.pids:
-            valid_pids[pid] = True
-        def check_pid(j):
-            return j in valid_pids
-
-    try:
-        items = [x.strip() for x in listspec.split(',')]
-        for item in items:
-            if '-' in item:
-                a, b = map(int, item.split('-'))
-                for j in xrange(a, b+1, 1):
-                    if check_pid(j):
-                        yield j
-            else:
-                j = int(item)
-                if check_pid(j):
-                    yield j
-    except ValueError:
-        raise ValueError("Invalid pid list '%s'" % listspec)
-
-def do_add(sched, p):
-    try:
-        for x in p.args:
-            for pid in pid_list_iter(x):
-                sched.add(pid, 0)
-    except ValueError:
-        p.error("Invalid pid %s" % x)
-    sched.save()
-
-def do_remove(sched, p):
-    try:
-        for x in p.args:
-            for pid in pid_list_iter(x, sched):
-                sched.remove(pid)
-    except ValueError:
-        p.error("Invalid pid %s" % x)
-    sched.save()
+            for job in self.jobs:
+                if fnmatch.fnmatch(job.jid, listspec):
+                    if (not only_pending or not job.completed
+                        or listspec == job.jid):
+                        yield job
 
 def do_schedule(sched, p):
     sched.schedule()
 
 def do_setprio(sched, p):
     try:
-        for pid in pid_list_iter(p.args[0], sched):
-            prio = float(p.args[1])
-            sched.remove(pid)
-            sched.add(pid, prio)
+        prio = float(p.args[1])
     except ValueError:
-        p.error("Invalid pid/prio")
-    sched.save()
+        p.error("Invalid priority")
+
+    for job in sched.jobs_iter(p.args[0]):
+        job.priority = prio
+
+    sched.save_jobs()
 
 def do_list(sched, p):
-    for pid, prio in sched.pids:
-        mark = " "
-        if _is_running(pid, False):
+    if not p.args:
+        p.args = ['all']
+
+    for job in sched.jobs_iter(p.args):
+        if job.is_running:
             mark = "*"
-        elif not _is_running(pid, True):
+        elif job.is_alive:
+            mark = "-"
+        elif job.started and not job.completed and not job.is_alive:
             mark = "/"
-        cmdline = ' '.join(_nice_cmdline(pid))
-        if not cmdline:
-            cmdline = "---"
+        else:
+            mark = " "
+            
+        cmdline = ' '.join(job.cmd)
         try:
-            print "%8d%s  %.2g  %s" % (pid, mark, prio, cmdline)
+            print "%8s%s  %.2g  %s" % (job.jid, mark, job.priority, cmdline)
         except IOError:
             return
 
@@ -300,55 +379,53 @@ def do_kill(sched, p):
     queue = []
 
     def _flush():
-        for pid2 in queue:
-            for k in xrange(50):
-                if not _is_running(pid2): break
-                time.sleep(0.05)
-        for pid2 in queue:
-            if _is_running(pid2):
-                os.kill(pid, signal.SIGKILL)
+        for k in xrange(100):
+            for process in queue:
+                if process.is_alive:
+                    break
+            time.sleep(0.05)
+        for process in queue:
+            if process.is_alive:
+                process.kill(signal.SIGKILL)
         del queue[:]
 
-    for pid in pid_list_iter(p.args, sched):
-        os.kill(pid, signal.SIGTERM)
-        os.kill(pid, signal.SIGCONT)
-        queue.append(pid)
+    for job in sched.jobs_iter(p.args):
+        process = job.process
+        job.kill()
+
+        if not process:
+            continue
+
+        # ensure that the process is really finally killed
+        # so that we won't end up with a large number of resumed
+        # processes running at the same time
+        queue.append(process)
 
         # clean
         time.sleep(0.05)
-        for pid2 in queue:
-            if not _is_running(pid2):
-                queue.remove(pid2)
+        for process in list(queue):
+            if not process.is_alive:
+                queue.remove(process)
 
         # check if forcing flush is needed
-        if len(queue) > sched.cfg['nprocs']:
+        if len(queue) > 1 + sched.cfg['nprocs']//2:
             _flush()
     
     _flush()
-    sched._update()
+    sched.save_jobs()
 
 def do_tail(sched, p, base_cmd=['tail', '-f']):
-    pids = list(pid_list_iter(p.args, sched))
+    jobs = list(sched.jobs_iter(p.args))
 
     files = []
-    for pid in pids:
-        log_glob = os.path.join(sched.cfg['logdir'], '*.%d' % (pid,))
-        new_files = glob.glob(log_glob)
-        new_files.sort(key=lambda fn: os.stat(fn).st_mtime)
-        if new_files:
-            files.append(new_files[-1])
+    for job in jobs:
+        if os.path.isfile(job.log_file):
+            files.append(job.log_file)
 
     if not files:
         print "No files to tail"
         return
 
-    for fn in files:
-        print fn
-        f = open(fn, 'r')
-        print "    " + f.readline(),
-        f.close()
-    print "-"*79
-    
     cmd = base_cmd + files
     os.execvp(cmd[0], cmd)
 
@@ -356,77 +433,30 @@ def do_less(sched, p):
     do_tail(sched, p, ['less', '+k'])
 
 def do_run(sched, p):
-    sched.add(os.getpid(), p.options.priority)
-    sched.save()
-
-    os.nice(sched.cfg['nice'])
-    _set_ioprio(os.getpid(), sched.cfg['ioprio'])
-    _stop_process(os.getpid())
-    os.execvp(p.args[0], p.args)
-    raise RuntimeError("Failed to execute command '%s'" % p.args)
+    sched.add_fg_and_save(p.args,
+                          prefix=p.options.prefix, priority=p.options.priority)
+    # doesn't return
 
 def do_run_bg(sched, p):
-    # 1st fork
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
+    sched.add(p.args,
+              prefix=p.options.prefix, priority=p.options.priority)
+    sched.save_jobs()
 
-    # invoke in background
-    os.setsid()
-
-    # 2nd fork to remove session leader status
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
-
-    # add to scheduler
-    print "Added pid", os.getpid()
-    sched.add(os.getpid(), p.options.priority)
-    sched.save()
-
-    # redirect output + close input
-    sys.stdout.flush()
-    sys.stderr.flush()
-    f = sched.logfile(os.getpid())
-    f2 = open(os.devnull, 'r')
-    os.dup2(f2.fileno(), sys.stdin.fileno())
-    os.dup2(f.fileno(), sys.stdout.fileno())
-    os.dup2(f.fileno(), sys.stderr.fileno())
-
-    # renice
-    os.nice(sched.cfg['nice'])
-    _set_ioprio(os.getpid(), sched.cfg['ioprio'])
-
-    # stop and run
-    _stop_process(os.getpid())
-    os.execvp(p.args[0], p.args)
-    raise RuntimeError("Failed to execute command '%s'" % p.args)
+def do_cleanup(sched, p):
+    to_remove = [x for x in sched.jobs_iter(p.args, only_pending=False)
+                 if x.completed]
+    for job in to_remove:
+        sched.kill(job)
+    sched.save_jobs()
 
 def main(argv):
-    help = """
-Process job controller, letting a limited number of jobs run at the same
-time.
-    
-commands:
-  add PIDS            Add a PID to the schedule list
-  remove PIDS         Remove a PID from the schedule list
-  list                List scheduled PIDs
-  schedule            Perfom scheduling, starting/stopping processes
-  setprio PIDS PRIO   Set a priority for a PID
-  run CMD             Run a command and put the process in the queue
-  bg CMD              Run a command in the background and insert to queue
-                      Redirect the output to a file in ~/.conjob.log/
-  kill PIDS           Kill processes; PIDS can also be 'all'.
-  tail PIDS           Tail -f logfiles of PIDS
-  less PIDS           Page through logfiles of PIDS
-
-'PIDS' can be a comma separated list of PIDs or PID ranges, or 'all'.
-""".strip()
-
-    p = optparse.OptionParser("%prog [options] command [...]\n\n" + help)
+    p = optparse.OptionParser(__doc__.strip())
     p.add_option('-p', '--priority', action='store', type=str,
                  dest='priority', default=0,
                  help="Priority for the started process")
+    p.add_option('-n', '--name-prefix', action='store', type=str,
+                 dest='prefix', default=None,
+                 help="Prefix for the JIDs of the jobs")
     p.allow_interspersed_args = False
     (options, args) = p.parse_args(argv)
 
@@ -435,10 +465,7 @@ commands:
 
     sched = PidScheduler(CFGFILE)
 
-    cmds = dict(add=do_add,
-                schedule=do_schedule,
-                remove=do_remove,
-                rm=do_remove,
+    cmds = dict(schedule=do_schedule,
                 setprio=do_setprio,
                 list=do_list,
                 ls=do_list,
@@ -446,7 +473,8 @@ commands:
                 bg=do_run_bg,
                 tail=do_tail,
                 less=do_less,
-                kill=do_kill)
+                kill=do_kill,
+                cleanup=do_cleanup)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
@@ -466,13 +494,13 @@ class Process(object):
     def __init__(self, pid):
         self.pid = pid
 
-    def kill(self):
-        os.kill(self.pid, signal.SIGTERM)
+    def kill(self, sig=signal.SIGTERM):
+        os.kill(self.pid, sig)
 
-    def stop(self):
+    def suspend(self):
         os.kill(self.pid, signal.SIGSTOP)
 
-    def cont(self):
+    def resume(self):
         os.kill(self.pid, signal.SIGCONT)
 
     @property
@@ -491,16 +519,13 @@ class Process(object):
         return 0
 
     @property
-    def is_running(self, accept_stopped=False):
+    def is_running(self):
         dr = '/proc/%d' % self.pid
         if os.path.isdir(dr):
             f = open('%s/stat' % dr)
             try:
                 x = f.read().split()
-                if accept_stopped:
-                    return True
-                else:
-                    return (x[2] != 'T')
+                return (x[2] != 'T')
             finally:
                 f.close()
         else:
@@ -512,10 +537,14 @@ class Process(object):
 
     def set_ioprio(self, ioprio=0):
         """Set IO priority"""
-        os.system('ionice -p %d -n %d' % (self.pid, ioprio))
+        if self.is_alive:
+            subprocess.call(['ionice', '-p', str(self.pid), '-n', str(ioprio)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def set_cpu_affinity(self, cpu=0):
-        os.system('schedtool -a %d %d' % (cpu, self.pid))
+        if self.is_alive:
+            subprocess.call(['schedtool', '-a', str(cpu), str(self.pid)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     @staticmethod
     def get_loadavg():
@@ -552,12 +581,9 @@ class Process(object):
         return 1e99
 
     @classmethod
-    def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None):
+    def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None, msg=""):
         (pid_pipe_r, pid_pipe_w) = os.pipe()
 
-
-        # p = conjob.Process.fork_to_background(['ls', '/'], '/tmp/foo.log.1')
-        
         # 1st fork
         pid = os.fork()
         if pid > 0:
@@ -577,6 +603,8 @@ class Process(object):
             sys.exit(0)
 
         self = cls(os.getpid())
+
+        # deliver pid info to the parent
         os.write(pid_pipe_w, '%d\n' % self.pid)
         os.close(pid_pipe_r)
         os.close(pid_pipe_w)
@@ -592,17 +620,34 @@ class Process(object):
         os.dup2(f.fileno(), sys.stdout.fileno())
         os.dup2(f.fileno(), sys.stderr.fileno())
 
+        # run
+        cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, stop=False, msg=msg)
+
+    @classmethod
+    def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, msg=""):
+        self = cls(os.getpid())
+
         # renice
-        if nice:
+        if nice is not None:
             os.nice(nice)
-        if ioprio:
+        if ioprio is not None:
             self.set_ioprio(ioprio)
 
-        # stop and run
-        self.stop()
+        if stop:
+            self.suspend()
+
+        if msg:
+            print msg
+        print datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),os.getcwd()
+        print " ".join(cmd)
+        print "-"*79
+        sys.stdout.flush()
+        sys.stderr.flush()
         os.execvp(cmd[0], cmd)
         raise RuntimeError("Failed to execute command '%s'" % cmd)
 
+    def __repr__(self):
+        return "<Process %d>" % self.pid
 
 if __name__ == "__main__":
     main(sys.argv[1:])
