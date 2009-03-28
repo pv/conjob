@@ -638,7 +638,7 @@ class Process(object):
                      cwd=cwd)
 
     @classmethod
-    def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=cwd,
+    def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=None,
                  msg=""):
         self = cls(os.getpid())
 
