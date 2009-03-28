@@ -26,7 +26,7 @@ Prepending '%' to the pattern makes it match also completed jobs.
 
 """
 import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
-import datetime, subprocess
+import datetime, subprocess, atexit
 import configobj
 
 CFGFILE = os.path.expanduser("~/.conjob")
@@ -177,12 +177,14 @@ class PidScheduler(object):
         self.cfg.setdefault('ioprio', 7)
         self.cfg.setdefault('loadavg', 2)
         self.cfg.setdefault('max_mem_percentage', 75)
+        self.cfg.setdefault('pager', None)
         self.cfg['nice'] = int(self.cfg['nice'])
         self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
         self.cfg['loadavg'] = float(self.cfg['loadavg'])
         self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
+        self.cfg['pager'] = str(self.cfg['pager'])
         self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
         self.load_jobs()
 
@@ -370,6 +372,18 @@ class PidScheduler(object):
                     if (only_completed is None or job.completed == only_completed or listspec == job.jid):
                         yield job
 
+    def redirect_to_pager(self):
+        pager = self.cfg['pager']
+        if pager is None:
+            return
+        try:
+            p = subprocess.Popen(pager.strip().split(), stdin=subprocess.PIPE)
+            sys.stdout = p.stdin
+            atexit.register(lambda: p.communicate())
+        except OSError:
+            pass
+
+
 def do_schedule(sched, p):
     if len(p.args) == 0:
         count = 1
@@ -399,6 +413,8 @@ def do_setprio(sched, p):
     sched.save_jobs()
 
 def do_list(sched, p):
+    sched.redirect_to_pager()
+ 
     if not p.args:
         p.args = ['all']
 
@@ -752,7 +768,6 @@ class KillWatch(object):
             if process.is_alive:
                 process.kill(signal.SIGKILL)
         del self.queue[:]
-
 
 if __name__ == "__main__":
     main(sys.argv[1:])
