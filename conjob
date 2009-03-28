@@ -253,9 +253,14 @@ class PidScheduler(object):
         self.jobs.remove(job)
 
     def _update(self):
+        to_remove = []
         for job in self.jobs:
             if job.start_time and not job.is_alive:
                 job.end_time = datetime.datetime.now()
+            if job.completed and not job.started:
+                to_remove.append(job)
+        for job in to_remove:
+            self.jobs.remove(job)
 
     def schedule(self):
         def _cmp_prio(a, b):
