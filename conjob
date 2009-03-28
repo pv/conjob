@@ -158,6 +158,10 @@ class Job(object):
             return None
         return self.process.pid
 
+    @property
+    def failed(self):
+        return os.path.isfile(self.log_file + '.fail')
+
     def __repr__(self):
         return "<Job %s: %s>" % (self.jid, " ".join(self.cmd))
 
@@ -392,6 +396,8 @@ def do_list(sched, p):
             mark = "- %d"  % job.process.pid
         elif job.started and not job.completed and not job.is_alive:
             mark = "/"
+        elif job.failed:
+            mark = "F"
         else:
             mark = " "
             
@@ -468,7 +474,7 @@ def do_bg_many(sched, p):
 def do_cleanup(sched, p):
     if not p.args:
         p.args = ['all']
-    to_remove = [x for x in sched.jobs_iter(p.args, only_completed=False)
+    to_remove = [x for x in sched.jobs_iter(p.args, only_completed=True)
                  if x.completed]
     for job in to_remove:
         sched.remove(job)
@@ -645,8 +651,11 @@ class Process(object):
         sys.stdout.flush()
         sys.stderr.flush()
         if isinstance(logfile, str):
-            logfile = open(logfile, 'a')
-        f = logfile
+            f = open(logfile, 'a')
+            failfile = logfile + '.fail'
+        else:
+            f = logfile
+            failfile = None
         f2 = open(os.devnull, 'r')
         os.dup2(f2.fileno(), sys.stdin.fileno())
         os.dup2(f.fileno(), sys.stdout.fileno())
@@ -654,11 +663,11 @@ class Process(object):
 
         # run
         cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, stop=False, msg=msg,
-                     cwd=cwd)
+                     cwd=cwd, failfile=failfile)
 
     @classmethod
     def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=None,
-                 msg=""):
+                 msg="", failfile=None):
         self = cls(os.getpid())
 
         # renice
@@ -679,8 +688,14 @@ class Process(object):
         print "-"*79
         sys.stdout.flush()
         sys.stderr.flush()
-        os.execvp(cmd[0], cmd)
-        raise RuntimeError("Failed to execute command '%s'" % cmd)
+        if failfile and os.path.isfile(failfile):
+            os.unlink(failfile)
+        ret = os.spawnvp(os.P_WAIT, cmd[0], cmd)
+        if ret != 0 and failfile:
+            f = open(failfile, 'w')
+            f.write('%d\n' % ret)
+            f.close()
+        sys.exit(0)
 
     def __repr__(self):
         return "<Process %d>" % self.pid
