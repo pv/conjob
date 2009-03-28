@@ -679,11 +679,6 @@ class Process(object):
 
         self = cls(os.getpid())
 
-        # deliver pid info to the parent
-        os.write(pid_pipe_w, '%d\n' % self.pid)
-        os.close(pid_pipe_r)
-        os.close(pid_pipe_w)
-
         # redirect output + close input
         sys.stdout.flush()
         sys.stderr.flush()
@@ -700,11 +695,11 @@ class Process(object):
 
         # run
         cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, stop=False, msg=msg,
-                     cwd=cwd, failfile=failfile)
+                     cwd=cwd, failfile=failfile, pid_pipe=pid_pipe_w)
 
     @classmethod
     def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=None,
-                 msg="", failfile=None):
+                 msg="", failfile=None, pid_pipe=None):
         self = cls(os.getpid())
 
         # renice
@@ -727,7 +722,16 @@ class Process(object):
         sys.stderr.flush()
         if failfile and os.path.isfile(failfile):
             os.unlink(failfile)
-        ret = os.spawnvp(os.P_WAIT, cmd[0], cmd)
+
+        pid = os.spawnvp(os.P_NOWAIT, cmd[0], cmd)
+
+        # deliver pid info to the parent
+        if pid_pipe is not None:
+            os.write(pid_pipe, '%d\n' % pid)
+            os.close(pid_pipe)
+
+        # capture return code
+        pid, ret = os.wait()
         if ret != 0 and failfile:
             f = open(failfile, 'w')
             f.write('%d\n' % ret)
