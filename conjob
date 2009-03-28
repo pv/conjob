@@ -338,11 +338,17 @@ class PidScheduler(object):
             for job in self.jobs_iter(items, only_completed):
                 yield job
         elif '{' in listspec:
-            pat = re.compile(r'{(\d+)-(\d+)}')
+            pat = re.compile(r'{(\d*)-(\d*)}')
             ms = list(pat.finditer(listspec))
             if not ms:
                 return
-            limits = [(int(m.group(1)), int(m.group(2))) for m in ms]
+
+            def toint(x, default=None):
+                if not x: return default
+                return int(x)
+
+            limits = [(toint(m.group(1), -sys.maxint),
+                       toint(m.group(2), sys.maxint)) for m in ms]
 
             offset = 0
             spec2 = listspec
@@ -351,7 +357,7 @@ class PidScheduler(object):
                 spec2 = spec2[:offset+m.start()] + rep + spec2[offset+m.end():]
                 offset += len(rep) - (m.end() - m.start())
 
-            pat = "^" + fnmatch.translate(spec2)
+            pat = "^" + fnmatch.translate(spec2).replace('.*', '.*?')
             pat = pat.replace(r'\<\<INDEX\>\>', '(\d+)')
             pat = re.compile(pat)
 
