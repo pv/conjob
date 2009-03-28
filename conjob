@@ -189,7 +189,7 @@ class PidScheduler(object):
         # avoid write races by writing to a temp file and overwriting
         # by moving (which probably is atomic within a FS)
         fd, tmp_fn = tempfile.mkstemp(
-                prefix=os.path.basename(self.cfg['joblist']),
+                prefix=os.path.basename(self.cfg['joblist']) + '-',
                 dir=os.path.dirname(self.cfg['joblist']))
         cfg = configobj.ConfigObj()
         cfg.filename = tmp_fn
@@ -215,11 +215,11 @@ class PidScheduler(object):
                     if int_prefix(job.jid) is not None] + [0])
         return "%s%d" % (prefix, imax+1)
 
-    def get_logfile_name(self, jid, timestamp=None):
+    def get_logfile_name(self, cmd, jid, timestamp=None):
         if timestamp is None:
             timestamp = time.strftime('%Y-%m-%d_%H-%M-%S')
         logfile_fn = os.path.join(self.cfg['logdir'],
-                                  '%s.%s' % (jid, timestamp))
+                                  '%s.%s.%s' % (cmd[0], jid, timestamp))
         return logfile_fn
 
     def save(self):
@@ -227,7 +227,7 @@ class PidScheduler(object):
 
     def add(self, cmd, prefix=None, priority=0.):
         jid = self.get_free_jid(prefix)
-        logfile = self.get_logfile_name(jid)
+        logfile = self.get_logfile_name(cmd, jid)
         job = Job(jid, cmd, logfile)
         job.priority = priority
         self.jobs.append(job)
@@ -414,6 +414,16 @@ def do_tail(sched, p, base_cmd=['tail', '-f']):
     for job in jobs:
         if os.path.isfile(job.log_file):
             files.append(job.log_file)
+
+    if base_cmd[0] == 'tail':
+        for fn in files:
+            print fn
+            f = open(fn, 'r')
+            print "    " + f.readline(),
+            print "    " + f.readline(),
+            print "    " + f.readline(),
+            f.close()
+        print "="*79
 
     if not files:
         print "No files to tail"
