@@ -13,6 +13,7 @@ commands:
   run CMD             Run a command and put the process in the queue
   bg CMD              Run a command in the background and insert to queue
                       Redirect the output to a file in ~/.conjob.log/
+  bg_many < CMDS      Queue many commands at once; one per line
   kill JIDS           Kill jobs
   tail JIDS           Tail -f logfiles
   less JIDS           Page through logfiles
@@ -91,7 +92,7 @@ class Job(object):
         return section
 
     def kill(self, signal=None):
-        if self.process and self.process.is_alive:
+        if self.is_alive:
             self.process.kill(signal)
             self.process.resume()
         if self.end_time is None:
@@ -195,6 +196,7 @@ class PidScheduler(object):
         fd, tmp_fn = tempfile.mkstemp(
                 prefix=os.path.basename(self.cfg['joblist']) + '-',
                 dir=os.path.dirname(self.cfg['joblist']))
+
         cfg = configobj.ConfigObj()
         cfg.filename = tmp_fn
         for job in self.jobs:
@@ -212,8 +214,8 @@ class PidScheduler(object):
                 try: return int(s)
                 except ValueError: return None
             else:
-                if not s.startswith(prefix + '-'): return None
-                try: return int(s[len(prefix)+1:])
+                if not s.startswith(prefix): return None
+                try: return int(s[len(prefix):])
                 except ValueError: return None
         imax = max([int_prefix(job.jid) for job in self.jobs
                     if int_prefix(job.jid) is not None] + [0])
@@ -248,7 +250,7 @@ class PidScheduler(object):
                          stop=True,
                          msg="Job %s" % job.jid)
 
-    def kill(self, job):
+    def remove(self, job):
         job.kill()
         self.jobs.remove(job)
 
@@ -312,24 +314,23 @@ class PidScheduler(object):
         self._update()
         self.save_jobs()
 
-    def jobs_iter(self, listspec, only_pending=True):
+    def jobs_iter(self, listspec, only_completed=False):
         if isinstance(listspec, str) and listspec.startswith('%'):
             listspec = listspec[1:]
             if not listspec:
                 listspec = 'all'
-            only_pending = False
+            only_completed = True
+
+        if isinstance(listspec, str) and listspec == 'all':
+            listspec = '*'
 
         if not isinstance(listspec, str):
             for item in listspec:
-                for job in self.jobs_iter(item, only_pending):
-                    yield job
-        elif listspec == 'all':
-            for job in self.jobs:
-                if not only_pending or not job.completed:
+                for job in self.jobs_iter(item, only_completed):
                     yield job
         elif ',' in listspec:
             items = [x.strip() for x in listspec.split(',')]
-            for job in self.jobs_iter(items, only_pending):
+            for job in self.jobs_iter(items, only_completed):
                 yield job
         elif '{' in listspec:
             pat = re.compile(r'{(\d+)-(\d+)}')
@@ -358,13 +359,12 @@ class PidScheduler(object):
                         if not min <= k <= max:
                             ok = False
                             break
-                    if ok:
+                    if ok and (only_completed is None or job.completed == only_completed):
                         yield job
         else:
             for job in self.jobs:
                 if fnmatch.fnmatch(job.jid, listspec):
-                    if (not only_pending or not job.completed
-                        or listspec == job.jid):
+                    if (only_completed is None or job.completed == only_completed or listspec == job.jid):
                         yield job
 
 def do_schedule(sched, p):
@@ -406,6 +406,7 @@ def do_kill(sched, p):
     for job in sched.jobs_iter(p.args):
         watch.kill(job)
     watch.flush()
+    sched._update()
     sched.save_jobs()
 
 def do_requeue(sched, p):
@@ -414,10 +415,11 @@ def do_requeue(sched, p):
         watch.kill(job)
         job.reset()
     watch.flush()
+    sched._update()
     sched.save_jobs()
 
 def do_tail(sched, p, base_cmd=['tail', '-f']):
-    jobs = list(sched.jobs_iter(p.args))
+    jobs = list(sched.jobs_iter(p.args, only_completed=None))
 
     files = []
     for job in jobs:
@@ -449,18 +451,27 @@ def do_run(sched, p):
                           prefix=p.options.prefix, priority=p.options.priority)
     # doesn't return
 
-def do_run_bg(sched, p):
+def do_bg(sched, p):
     sched.add(p.args,
               prefix=p.options.prefix, priority=p.options.priority)
+    sched.save_jobs()
+
+def do_bg_many(sched, p):
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        cmd = line.split()
+        sched.add(cmd, prefix=p.options.prefix, priority=p.options.priority)
     sched.save_jobs()
 
 def do_cleanup(sched, p):
     if not p.args:
         p.args = ['all']
-    to_remove = [x for x in sched.jobs_iter(p.args, only_pending=False)
+    to_remove = [x for x in sched.jobs_iter(p.args, only_completed=False)
                  if x.completed]
     for job in to_remove:
-        sched.kill(job)
+        sched.remove(job)
     sched.save_jobs()
 
 def main(argv):
@@ -484,7 +495,8 @@ def main(argv):
                 list=do_list,
                 ls=do_list,
                 run=do_run,
-                bg=do_run_bg,
+                bg=do_bg,
+                bg_many=do_bg_many,
                 tail=do_tail,
                 less=do_less,
                 kill=do_kill,
@@ -511,8 +523,10 @@ class Process(object):
 
     def kill(self, sig=None):
         if sig is None:
-            sig = signal.SIGTERM
-        os.kill(self.pid, sig)
+            os.kill(self.pid, signal.SIGINT)
+            os.kill(self.pid, signal.SIGTERM)
+        else:
+            os.kill(self.pid, sig)
 
     def suspend(self):
         os.kill(self.pid, signal.SIGSTOP)
