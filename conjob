@@ -8,7 +8,7 @@ time.
 
 commands:
   list                List scheduled PIDs
-  schedule            Perfom scheduling, starting/stopping processes
+  schedule [COUNT]    Perfom scheduling, starting/stopping processes
   setprio JIDS PRIO   Set a priority for a PID
   run CMD             Run a command and put the process in the queue
   bg CMD              Run a command in the background and insert to queue
@@ -316,7 +316,6 @@ class PidScheduler(object):
             job.suspend()
 
         self._update()
-        self.save_jobs()
 
     def jobs_iter(self, listspec, only_completed=False):
         if isinstance(listspec, str) and listspec.startswith('%'):
@@ -372,7 +371,21 @@ class PidScheduler(object):
                         yield job
 
 def do_schedule(sched, p):
-    sched.schedule()
+    if len(p.args) == 0:
+        count = 1
+    elif len(p.args) == 1:
+        try:
+            count = int(p.args[0])
+            if count <= 0:
+                raise ValueError()
+        except ValueError:
+            p.error("invalid schedule count")
+    else:
+        p.error("invalid number of arguments")
+
+    for k in xrange(count):
+        sched.schedule()
+    sched.save_jobs()
 
 def do_setprio(sched, p):
     try:
