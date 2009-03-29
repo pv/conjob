@@ -413,11 +413,12 @@ def do_schedule(sched, p):
 
 def do_setprio(sched, p):
     try:
-        prio = float(p.args[1])
+        prio = p.args.pop(-1)
+        prio = float(prio)
     except ValueError:
         p.error("Invalid priority")
 
-    for job in sched.jobs_iter(p.args[0]):
+    for job in sched.jobs_iter(p.args):
         job.priority = prio
 
     sched.save_jobs()
