@@ -384,6 +384,8 @@ class PidScheduler(object):
         pager = self.cfg['pager']
         if pager is None:
             return
+        if not os.isatty(sys.stdin.fileno()):
+            return
         try:
             p = subprocess.Popen(pager.strip().split(), stdin=subprocess.PIPE)
             sys.stdout = p.stdin
