@@ -163,7 +163,7 @@ class Job(object):
         return os.path.isfile(self.log_file + '.fail')
 
     def __repr__(self):
-        return "<Job %s: %s>" % (self.jid, " ".join(self.cmd))
+        return "<Job %s: %s>" % (self.jid, shell_join(self.cmd))
 
 
 class PidScheduler(object):
@@ -441,7 +441,7 @@ def do_list(sched, p):
         else:
             mark = " "
             
-        cmdline = ' '.join(job.cmd)
+        cmdline = shell_join(job.cmd)
         try:
             print "%8s%-8s  %.2g  %s" % (job.jid, mark, job.priority, cmdline)
         except IOError:
@@ -465,7 +465,7 @@ def do_requeue(sched, p):
     sched.save_jobs()
 
 def do_tail(sched, p, base_cmd=['tail', '-f']):
-    jobs = list(sched.jobs_iter(p.args, only_completed=None))
+    jobs = list(sched.jobs_iter(p.args))
 
     files = []
     for job in jobs:
@@ -719,7 +719,7 @@ class Process(object):
         if msg:
             print msg
         print datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),os.getcwd()
-        print " ".join(cmd)
+        print shell_join(cmd)
         print "-"*79
         sys.stdout.flush()
         sys.stderr.flush()
@@ -818,6 +818,21 @@ def shell_split(s):
         parts.append(buf)
 
     return parts
+
+def shell_join(parts):
+    items = []
+    for p in parts:
+        if ' ' in p or '\t' in p:
+            if '=' in p:
+                a, b = p.split('=', 1)
+                if not (' ' in a or '\t' in a):
+                    items.append("%s=\"%s\"" % (a.replace('"', '\\"'),
+                                                b.replace('"', '\\"')))
+                    continue
+            items.append("\"%s\"" % p.replace('"', '\\"'))
+        else:
+            items.append(p)
+    return " ".join(items)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
