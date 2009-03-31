@@ -507,7 +507,7 @@ def do_bg_many(sched, p):
         line = line.strip()
         if not line:
             continue
-        cmd = line.split()
+        cmd = shell_split(line)
         sched.add(cmd, prefix=p.options.prefix, priority=p.options.priority)
     sched.save_jobs()
 
@@ -789,6 +789,35 @@ class KillWatch(object):
             if process.is_alive:
                 process.kill(signal.SIGKILL)
         del self.queue[:]
+
+def shell_split(s):
+    parts = []
+    buf = ""
+    last_quote = None
+    escape = False
+
+    for c in s:
+        if escape:
+            buf += c
+            escape = False
+        elif c in ("'", "\""):
+            if last_quote == c:
+                last_quote = None
+            elif last_quote is None:
+                last_quote = c
+            else:
+                buf += c
+        elif c == "\\":
+            escape = True
+        elif c.isspace() and last_quote is None and buf:
+            parts.append(buf)
+            buf = ""
+        else:
+            buf += c
+    if buf:
+        parts.append(buf)
+
+    return parts
 
 if __name__ == "__main__":
     main(sys.argv[1:])
