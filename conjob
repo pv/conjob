@@ -109,6 +109,10 @@ class Job(object):
         self.start_time = None
         self.end_time = None
 
+        failfile = self.log_file + '.fail'
+        if os.path.isfile(failfile):
+            os.unlink(failfile)
+
     def resume(self):
         if self.is_alive:
             self.process.resume()
