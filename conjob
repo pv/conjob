@@ -6,7 +6,7 @@ conjob [options] command [...]
 Process job controller, letting a limited number of jobs run at the same
 time.
 
-commands:
+Commands:
   list                List scheduled PIDs
   schedule [COUNT]    Perfom scheduling, starting/stopping processes
   setprio JIDS PRIO   Set a priority for a PID
@@ -19,15 +19,18 @@ commands:
   less JIDS           Page through logfiles
   cleanup JIDS        Remove completed jobs from the job list
   requeue JIDS        Kill and re-queue given jobs
+  dump_jobs [FILE]    Dump a job listing to FILE or stdout
+  load_jobs [FILE]    Load a job listing from FILE or stdin
 
-'JIDS' can be a comma separated list of JIDs, or a shell glob pattern.
-The syntax '{MIN-MAX}' matches all integers from MIN to MAX.
-Prepending '%' to the pattern makes it match also completed jobs.
+  'JIDS' can be a comma separated list of JIDs, or a shell glob pattern.
+  The syntax '{MIN-MAX}' matches all integers from MIN to MAX.
+  Prepending '%' to the pattern makes it match also completed jobs.
 
 """
 import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
 import datetime, subprocess, atexit
 import configobj
+import cPickle as pickle
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -191,10 +194,25 @@ class PidScheduler(object):
         if not os.path.isdir(self.cfg['logdir']):
             os.makedirs(self.cfg['logdir'])
 
-    def load_jobs(self):
-        cfg = configobj.ConfigObj(self.cfg['joblist'])
+    def load_jobs_cfg(self, stream):
+        cfg = configobj.ConfigObj(stream)
         for key, value in cfg.iteritems():
             self.jobs.append(Job.from_section(value))
+
+    def dump_jobs_cfg(self, stream):
+        cfg = configobj.ConfigObj()
+        for job in self.jobs:
+            cfg[job.jid] = job.as_section()
+        cfg.write(stream)
+
+    def load_jobs(self):
+        fn = self.cfg['joblist']
+        if os.path.exists(fn):
+            f = open(fn, 'rb')
+            try:
+                self.jobs = pickle.load(f)
+            finally:
+                f.close()
 
     def save_jobs(self):
         # avoid write races by writing to a temp file and overwriting
@@ -202,12 +220,14 @@ class PidScheduler(object):
         fd, tmp_fn = tempfile.mkstemp(
                 prefix=os.path.basename(self.cfg['joblist']) + '-',
                 dir=os.path.dirname(self.cfg['joblist']))
+        os.close(fd)
 
-        cfg = configobj.ConfigObj()
-        cfg.filename = tmp_fn
-        for job in self.jobs:
-            cfg[job.jid] = job.as_section()
-        cfg.write()
+        f = open(tmp_fn, 'wb')
+        try:
+            pickle.dump(self.jobs, f)
+        finally:
+            f.close()
+
         shutil.move(tmp_fn, self.cfg['joblist'])
 
     def get_free_jid(self, prefix=""):
@@ -520,6 +540,23 @@ def do_cleanup(sched, p):
         sched.remove(job)
     sched.save_jobs()
 
+def do_dump_jobs(sched, p):
+    if len(p.args) == 0:
+        sched.dump_jobs_cfg(sys.stdout)
+    elif len(p.args) == 1:
+        sched.dump_jobs_cfg(p.args[0])
+    else:
+        p.error('invalid number of arguments')
+
+def do_load_jobs(sched, p):
+    if len(p.args) == 0:
+        sched.load_jobs_cfg(sys.stdout)
+    elif len(p.args) == 1:
+        sched.load_jobs_cfg(p.args[0])
+    else:
+        p.error('invalid number of arguments')
+    sched.save_jobs()
+
 def main(argv):
     p = optparse.OptionParser(__doc__.strip())
     p.add_option('-p', '--priority', action='store', type=str,
@@ -547,7 +584,9 @@ def main(argv):
                 less=do_less,
                 kill=do_kill,
                 cleanup=do_cleanup,
-                requeue=do_requeue)
+                requeue=do_requeue,
+                dump_jobs=do_dump_jobs,
+                load_jobs=do_load_jobs)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
