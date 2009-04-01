@@ -829,6 +829,10 @@ class KillWatch(object):
                 process.kill(signal.SIGKILL)
         del self.queue[:]
 
+#------------------------------------------------------------------------------
+# Helper routines
+#------------------------------------------------------------------------------
+
 def shell_split(s):
     parts = []
     buf = ""
