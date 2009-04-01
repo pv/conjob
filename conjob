@@ -205,6 +205,9 @@ class PidScheduler(object):
 
     def dump_jobs_cfg(self, stream):
         cfg = configobj.ConfigObj()
+        if isinstance(stream, str):
+            cfg.filename = stream
+            stream = None
         for job in self.jobs:
             cfg[job.jid] = job.as_section()
         cfg.write(stream)
@@ -563,6 +566,93 @@ def do_load_jobs(sched, p):
         p.error('invalid number of arguments')
     sched.save_jobs()
 
+def do_stats(sched, p):
+    import numpy as np
+    if not p.args:
+        p.args = ['all', '%all']
+    jobs = list(sched.jobs_iter(p.args))
+
+    queue_time = []
+    run_time = []
+    failed_run_time = []
+    total = len(jobs)
+
+    def secs(dt):
+        return 60*60*24*dt.days + dt.seconds + 1e-6*dt.microseconds
+
+    for job in jobs:
+        if job.started:
+            queue_time.append(secs(job.start_time - job.queue_time))
+        else:
+            queue_time.append(secs(datetime.datetime.now() - job.queue_time))
+
+        if job.completed:
+            rt = secs(job.end_time - job.start_time)
+            if rt > 0:
+                # skip bogus run times
+                if job.failed:
+                    failed_run_time.append(rt)
+                else:
+                    run_time.append(rt)
+
+    def fmt_time(dt):
+        if dt < 60:
+            return "%.1f sec" % dt
+        elif dt < 60*60:
+            mins, secs = divmod(dt, 60)
+            return "%d min %d sec" % (mins, secs)
+        elif dt < 60*60*24:
+            hours, secs = divmod(dt, 60*60)
+            mins = round(secs/60)
+            return "%d h %d min" % (hours, mins)
+        else:
+            days, secs = divmod(dt, 60*60*24)
+            hours = round(secs/3600)
+            return "%d days %d hours" % (days, hours)
+
+    def xval(v):
+        if not v: return [np.nan]
+        else: return v
+
+    msg = """
+Statistics
+----------
+
+Jobs: %(jobspec)s
+
+Queue time               [%(cnt_q)d]
+  - mean:    %(avg_q)s
+  - median:  %(med_q)s
+  - spread:  %(min_q)s --- %(max_q)s
+
+Run time                 [%(cnt_r)d]
+  - mean:    %(avg_r)s
+  - median:  %(med_r)s
+  - spread:  %(min_r)s --- %(max_r)s
+
+Run time (failed runs)   [%(cnt_fr)d]
+  - mean:    %(avg_fr)s
+  - median:  %(med_fr)s
+  - spread:  %(min_fr)s --- %(max_fr)s
+""" % dict(jobspec=shell_join(p.args),
+           avg_q=fmt_time(np.mean(xval(queue_time))),
+           med_q=fmt_time(np.median(xval(queue_time))),
+           min_q=fmt_time(np.min(xval(queue_time))),
+           max_q=fmt_time(np.max(xval(queue_time))),
+           avg_r=fmt_time(np.mean(xval(run_time))),
+           med_r=fmt_time(np.median(xval(run_time))),
+           min_r=fmt_time(np.min(xval(run_time))),
+           max_r=fmt_time(np.max(xval(run_time))),
+           avg_fr=fmt_time(np.mean(xval(failed_run_time))),
+           med_fr=fmt_time(np.median(xval(failed_run_time))),
+           min_fr=fmt_time(np.min(xval(failed_run_time))),
+           max_fr=fmt_time(np.max(xval(failed_run_time))),
+           cnt_q=len(queue_time),
+           cnt_r=len(run_time),
+           cnt_fr=len(failed_run_time),
+           )
+    print msg
+
 def main(argv):
     p = optparse.OptionParser(__doc__.strip())
     p.add_option('-p', '--priority', action='store', type="float",
@@ -592,7 +682,8 @@ def main(argv):
                 cleanup=do_cleanup,
                 requeue=do_requeue,
                 dump_jobs=do_dump_jobs,
-                load_jobs=do_load_jobs)
+                load_jobs=do_load_jobs,
+                stats=do_stats)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
