@@ -565,7 +565,7 @@ def do_load_jobs(sched, p):
 
 def main(argv):
     p = optparse.OptionParser(__doc__.strip())
-    p.add_option('-p', '--priority', action='store', type=str,
+    p.add_option('-p', '--priority', action='store', type="float",
                  dest='priority', default=0,
                  help="Priority for the started process")
     p.add_option('-n', '--name-prefix', action='store', type=str,
