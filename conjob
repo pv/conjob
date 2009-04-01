@@ -621,19 +621,19 @@ Statistics
 Jobs: %(jobspec)s
 
 Queue time               [%(cnt_q)d]
-  - mean:    %(avg_q)s
-  - median:  %(med_q)s
-  - spread:  %(min_q)s --- %(max_q)s
+  - mean:    %(avg_q)15s
+  - median:  %(med_q)15s
+  - spread:  %(min_q)15s --- %(max_q)s
 
 Run time                 [%(cnt_r)d]
-  - mean:    %(avg_r)s
-  - median:  %(med_r)s
-  - spread:  %(min_r)s --- %(max_r)s
+  - mean:    %(avg_r)15s
+  - median:  %(med_r)15s
+  - spread:  %(min_r)15s --- %(max_r)s
 
 Run time (failed runs)   [%(cnt_fr)d]
-  - mean:    %(avg_fr)s
-  - median:  %(med_fr)s
-  - spread:  %(min_fr)s --- %(max_fr)s
+  - mean:    %(avg_fr)15s
+  - median:  %(med_fr)15s
+  - spread:  %(min_fr)15s --- %(max_fr)s
 """ % dict(jobspec=shell_join(p.args),
            avg_q=fmt_time(np.mean(xval(queue_time))),
            med_q=fmt_time(np.median(xval(queue_time))),
