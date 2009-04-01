@@ -596,23 +596,28 @@ def do_stats(sched, p):
                     run_time.append(rt)
 
     def fmt_time(dt):
-        if dt < 60:
+        if not np.isfinite(dt):
+            return "--"
+        elif dt < 60:
             return "%.1f sec" % dt
         elif dt < 60*60:
             mins, secs = divmod(dt, 60)
             return "%d min %d sec" % (mins, secs)
         elif dt < 60*60*24:
             hours, secs = divmod(dt, 60*60)
-            mins = round(secs/60)
+            mins = round(secs/60.)
             return "%d h %d min" % (hours, mins)
         else:
             days, secs = divmod(dt, 60*60*24)
-            hours = round(secs/3600)
+            hours = round(secs/3600.)
             return "%d days %d hours" % (days, hours)
 
     def xval(v):
         if not v: return [np.nan]
         else: return v
+
+    est_remaining = (len(queue_time) - len(run_time)) * np.mean(xval(run_time))
+    est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
 
     msg = """
 Statistics
@@ -634,6 +639,10 @@ Run time (failed runs)   [%(cnt_fr)d]
   - mean:    %(avg_fr)15s
   - median:  %(med_fr)15s
   - spread:  %(min_fr)15s --- %(max_fr)s
+
+Estimated completion time (based on selected completed jobs)
+  - remain:  %(est_remaining)s
+  - at:      %(est_time)s
 """ % dict(jobspec=shell_join(p.args),
            avg_q=fmt_time(np.mean(xval(queue_time))),
            med_q=fmt_time(np.median(xval(queue_time))),
@@ -650,6 +659,8 @@ Run time (failed runs)   [%(cnt_fr)d]
            cnt_q=len(queue_time),
            cnt_r=len(run_time),
            cnt_fr=len(failed_run_time),
+           est_remaining=fmt_time(est_remaining),
+           est_time=est_time.strftime('%Y-%m-%d %H:%M %a'),
            )
     print msg
 
