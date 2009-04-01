@@ -858,8 +858,9 @@ def shell_split(s):
                 buf += c
         elif c == "\\":
             escape = True
-        elif c.isspace() and last_quote is None and buf:
-            parts.append(buf)
+        elif c.isspace() and last_quote is None:
+            if buf:
+                parts.append(buf)
             buf = ""
         else:
             buf += c
