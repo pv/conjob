@@ -350,7 +350,7 @@ class PidScheduler(object):
 
         self._update()
 
-    def jobs_iter(self, listspec, only_completed=False):
+    def jobs_iter(self, listspec, only_completed=False, target=None):
         if isinstance(listspec, str) and listspec.startswith('%'):
             listspec = listspec[1:]
             if not listspec:
@@ -361,7 +361,8 @@ class PidScheduler(object):
             listspec = listspec[1:]
             def target(job):
                 return shell_join(job.cmd)
-        else:
+
+        if target is None:
             def target(job):
                 return job.jid
 
@@ -370,11 +371,11 @@ class PidScheduler(object):
 
         if not isinstance(listspec, str):
             for item in listspec:
-                for job in self.jobs_iter(item, only_completed):
+                for job in self.jobs_iter(item, only_completed, target):
                     yield job
         elif ',' in listspec:
             items = [x.strip() for x in listspec.split(',')]
-            for job in self.jobs_iter(items, only_completed):
+            for job in self.jobs_iter(items, only_completed, target):
                 yield job
         elif '{' in listspec:
             pat = re.compile(r'{(\d*)-(\d*)}')
