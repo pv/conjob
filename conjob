@@ -357,6 +357,14 @@ class PidScheduler(object):
                 listspec = 'all'
             only_completed = True
 
+        if isinstance(listspec, str) and listspec.startswith('@'):
+            listspec = listspec[1:]
+            def target(job):
+                return shell_join(job.cmd)
+        else:
+            def target(job):
+                return job.jid
+
         if isinstance(listspec, str) and listspec == 'all':
             listspec = '*'
 
@@ -393,7 +401,7 @@ class PidScheduler(object):
             pat = re.compile(pat)
 
             for job in self.jobs:
-                jm = pat.match(job.jid)
+                jm = pat.match(target(job))
                 if jm:
                     ints = map(int, jm.groups())
                     ok = True
@@ -405,8 +413,8 @@ class PidScheduler(object):
                         yield job
         else:
             for job in self.jobs:
-                if fnmatch.fnmatch(job.jid, listspec):
-                    if (only_completed is None or job.completed == only_completed or listspec == job.jid):
+                if fnmatch.fnmatch(target(job), listspec):
+                    if (only_completed is None or job.completed == only_completed or listspec == target(job)):
                         yield job
 
     def redirect_to_pager(self):
