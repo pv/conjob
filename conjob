@@ -56,6 +56,10 @@ class Job(object):
     def _strptime(cls, s):
         return datetime.datetime.strptime(s, cls.date_format)
 
+    def update(self):
+        if self.process and not self.process.is_alive:
+            self.process = None
+
     @classmethod
     def from_section(cls, section):
         self = Job(None, None, None)
@@ -213,6 +217,8 @@ class PidScheduler(object):
                 self.jobs = pickle.load(f)
             finally:
                 f.close()
+        for job in self.jobs:
+            job.update()
 
     def save_jobs(self):
         # avoid write races by writing to a temp file and overwriting
