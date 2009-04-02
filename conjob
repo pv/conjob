@@ -629,7 +629,8 @@ def do_stats(sched, p):
         if not v: return [np.nan]
         else: return v
 
-    est_remaining = (len(queue_time) - len(run_time)) * np.mean(xval(run_time))
+    nremaining = len(queue_time) - len(run_time) - len(failed_run_time)
+    est_remaining = nremaining * np.mean(xval(run_time))
     est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
 
     msg = """
