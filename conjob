@@ -1042,17 +1042,11 @@ def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
 
     scale = ncols / float(hist.max())
 
-    first = True
     for j, bin in enumerate(hist):
         i = int(round(scale*bin))
         if i == 0: continue
         s = "*" * i + " " * (ncols-i) + "    "
-        if first:
-            first = False
-            label = "%s -- %s" % (fmt_label(edges[j]),
-                                  fmt_label(edges[j+1]))
-        else:
-            label = "-- %s" % fmt_label(edges[j+1])
+        label = "%s .. %s" % (fmt_label(edges[j]), fmt_label(edges[j+1]))
         rows.append((s, label))
 
     nlabel = max(len(r[1]) for r in rows)
