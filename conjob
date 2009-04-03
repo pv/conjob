@@ -1027,7 +1027,10 @@ def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
     x = np.asarray(x)
 
     if logbins and isinstance(bins, int):
-        bins = np.logspace(np.log10(x.min()), np.log10(x.max()), bins)
+        bins = np.logspace(np.log10(max(x.min(),1e-14)), np.log10(x.max()),
+                           bins)
+        if x.min() == 0:
+            bins[0] = 0
 
     hist, edges = np.histogram(x, bins=bins, new=True)
 
