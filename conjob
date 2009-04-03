@@ -633,6 +633,18 @@ def do_stats(sched, p):
     est_remaining = nremaining * np.mean(xval(run_time))
     est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
 
+    q_hist = ascii_hist(queue_time, bins=8, fmt_label=fmt_time)
+    r_hist = ascii_hist(run_time, bins=8, fmt_label=fmt_time)
+    fr_hist = ascii_hist(failed_run_time, bins=8, fmt_label=fmt_time)
+
+    def indent(s, n):
+        if isinstance(n, int):
+            n = " "*n
+        s = n + s.replace("\n", "\n" + n)
+        if s.endswith(n):
+            s = s[:-len(n)]
+        return s
+
     msg = """
 Statistics
 ----------
@@ -644,15 +656,21 @@ Queue time               [%(cnt_q)d]
   - median:  %(med_q)15s
   - spread:  %(min_q)15s --- %(max_q)s
 
+%(q_hist)s
+
 Run time                 [%(cnt_r)d]
   - mean:    %(avg_r)15s
   - median:  %(med_r)15s
   - spread:  %(min_r)15s --- %(max_r)s
 
+%(r_hist)s
+
 Run time (failed runs)   [%(cnt_fr)d]
   - mean:    %(avg_fr)15s
   - median:  %(med_fr)15s
   - spread:  %(min_fr)15s --- %(max_fr)s
+
+%(fr_hist)s
 
 Estimated completion time (based on selected completed jobs)
   - remain:  %(est_remaining)s
@@ -675,6 +693,9 @@ Estimated completion time (based on selected completed jobs)
            cnt_fr=len(failed_run_time),
            est_remaining=fmt_time(est_remaining),
            est_time=est_time.strftime('%Y-%m-%d %H:%M %a'),
+           q_hist=indent(q_hist, 2),
+           r_hist=indent(r_hist, 2),
+           fr_hist=indent(fr_hist, 2),
            )
     print msg
 
@@ -999,6 +1020,45 @@ def shell_join(parts):
         else:
             items.append(p)
     return " ".join(items)
+
+def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
+    import numpy as np
+
+    x = np.asarray(x)
+
+    if logbins and isinstance(bins, int):
+        bins = np.logspace(np.log10(x.min()), np.log10(x.max()), bins)
+
+    hist, edges = np.histogram(x, bins=bins, new=True)
+
+    ncols = 40
+    rows = []
+
+    if fmt_label is None:
+        fmt_label = lambda x: "%g" % x
+
+    scale = ncols / float(hist.max())
+
+    first = True
+    for j, bin in enumerate(hist):
+        i = int(round(scale*bin))
+        if i == 0: continue
+        s = "*" * i + " " * (ncols-i) + "    "
+        if first:
+            first = False
+            label = "%s -- %s" % (fmt_label(edges[j]),
+                                  fmt_label(edges[j+1]))
+        else:
+            label = "-- %s" % fmt_label(edges[j+1])
+        rows.append((s, label))
+
+    nlabel = max(len(r[1]) for r in rows)
+    nlabel = max(nlabel, 70-ncols)
+    label_fmt = "%%%ds  " % nlabel
+
+    rows = [(label_fmt%r[1]) + r[0] for r in rows]
+
+    return "\n".join(rows)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
