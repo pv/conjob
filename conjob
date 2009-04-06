@@ -318,7 +318,7 @@ class PidScheduler(object):
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
-        running = len([z for z in queue if z.is_alive])
+        running = len([z for z in queue if z.is_running])
         max_nprocs = running + int(round(self.cfg['loadavg']
                                          - Process.get_loadavg()))
         max_nprocs = max(1, max_nprocs)
