@@ -625,6 +625,21 @@ def do_stats(sched, p):
             hours = round(secs/3600.)
             return "%d days %d hours" % (days, hours)
 
+    def fmt_time_short(dt):
+        if not np.isfinite(dt):
+            return "--"
+        elif dt < 60:
+            return "%.1f sec" % dt
+        elif dt < 60*60:
+            mins, secs = divmod(dt, 60)
+            return "%d min" % mins
+        elif dt < 60*60*24:
+            hours, secs = divmod(dt, 60*60)
+            return "%d h" % hours
+        else:
+            days, secs = divmod(dt, 60*60*24)
+            return "%d days" % days
+
     def xval(v):
         if not v: return [np.nan]
         else: return v
@@ -633,9 +648,9 @@ def do_stats(sched, p):
     est_remaining = nremaining * np.mean(xval(run_time))
     est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
 
-    q_hist = ascii_hist(queue_time, bins=8, fmt_label=fmt_time)
-    r_hist = ascii_hist(run_time, bins=8, fmt_label=fmt_time)
-    fr_hist = ascii_hist(failed_run_time, bins=8, fmt_label=fmt_time)
+    q_hist = ascii_hist(queue_time, bins=8, fmt_label=fmt_time_short)
+    r_hist = ascii_hist(run_time, bins=8, fmt_label=fmt_time_short)
+    fr_hist = ascii_hist(failed_run_time, bins=8, fmt_label=fmt_time_short)
 
     def indent(s, n):
         if isinstance(n, int):
