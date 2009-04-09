@@ -308,14 +308,20 @@ class PidScheduler(object):
 
     def schedule(self):
         def _cmp_prio(a, b):
-            return cmp(a.priority, b.priority)
+            # highest priority first
+            v = cmp(b.priority, a.priority)
+            if v != 0:
+                return v
+            # then, alive processes first
+            v = cmp(b.is_alive, a.is_alive)
+            return v
 
         # Check status
         self._update()
 
         # Sort
         queue = [x for x in self.jobs if not x.completed]
-        queue.sort(_cmp_prio, reverse=True)
+        queue.sort(_cmp_prio)
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
