@@ -628,7 +628,7 @@ def do_bg(sched, p):
     p2 = get_run_optparse(p)
     (options, args) = p2.parse_args(p.args)
 
-    sched.add(p.args, prefix=options.prefix, priority=options.priority)
+    sched.add(args, prefix=options.prefix, priority=options.priority)
     sched.save_jobs()
 
 def do_bg_many(sched, p):
