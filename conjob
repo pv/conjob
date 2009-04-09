@@ -505,28 +505,56 @@ def do_list(sched, p):
     elif options.sort == 'end':
         jobs.sort(key=lambda job: job.end_time)
 
+    # format data
+    fields = ['jid', 'pid', 'end_time', 'prio', 'cmd']
+    formats = dict(jid='%-Ns', prio='%Ns', cmd='%-Ns', pid='%Ns',
+                   end_time='%Ns')
+
+    rows = []
     for job in jobs:
         if options.running_only and not job.is_running:
             continue
         if options.alive_only and not job.is_alive:
             continue
-            
+
+        pid = ""
         if job.is_running:
-            mark = "* %d" % job.process.pid
+            mark = "*"
+            pid = "%d" % job.process.pid
         elif job.is_alive:
-            mark = "- %d"  % job.process.pid
+            mark = "-"
+            pid = "%d" % job.process.pid
         elif job.started and not job.completed and not job.is_alive:
             mark = "/"
         elif job.failed:
             mark = "F"
         else:
             mark = " "
-            
+
+        if job.completed:
+            end_time = job.end_time.strftime('%Y-%m-%d %H:%M')
+        else:
+            end_time = ""
+        
         cmdline = shell_join(job.cmd)
-        try:
-            print "%8s%-8s  %.2g  %s" % (job.jid, mark, job.priority, cmdline)
-        except IOError:
-            return
+        rows.append(dict(jid=job.jid + mark,
+                         pid=pid,
+                         end_time=end_time,
+                         prio="%.2g" % job.priority,
+                         cmd=cmdline))
+
+    # print in columns
+    rowlens = dict((fld, max(len(r[fld]) for r in rows))
+                   for fld in fields)
+    len_formats = dict((fld, formats[fld].replace('N', str(rowlens[fld])))
+                       for fld in fields)
+
+    try:
+        for row in rows:
+            print " ".join(len_formats[fld] % row[fld] for fld in fields)
+    except IOError:
+        pass
+
 
 def do_kill(sched, p):
     watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
