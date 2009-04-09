@@ -655,7 +655,11 @@ def do_stats(sched, p):
 
     nremaining = len(queue_time) - len(run_time) - len(failed_run_time)
     est_remaining = nremaining * np.mean(xval(run_time))
-    est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
+
+    if np.isfinite(est_remaining):
+        est_time = datetime.datetime.now() + datetime.timedelta(seconds=est_remaining)
+    else:
+        est_time = datetime.datetime.now()
 
     q_hist = ascii_hist(queue_time, bins=8, fmt_label=fmt_time_short)
     r_hist = ascii_hist(run_time, bins=8, fmt_label=fmt_time_short)
@@ -1049,6 +1053,9 @@ def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
     import numpy as np
 
     x = np.asarray(x)
+
+    if x.size == 0:
+        return ""
 
     if logbins and isinstance(bins, int):
         bins = np.logspace(np.log10(max(x.min(),1e-14)), np.log10(x.max()),
