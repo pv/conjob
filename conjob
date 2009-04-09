@@ -24,7 +24,8 @@ Commands:
 
   'JIDS' can be a comma separated list of JIDs, or a shell glob pattern.
   The syntax '{MIN-MAX}' matches all integers from MIN to MAX.
-  Prepending '%' to the pattern makes it match also completed jobs.
+  Prepending '/' to the pattern makes it match also completed jobs,
+  '@' the command lines, '%' the PIDs.
 
 """
 import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
@@ -355,7 +356,7 @@ class PidScheduler(object):
         self._update()
 
     def jobs_iter(self, listspec, only_completed=False, target=None):
-        if isinstance(listspec, str) and listspec.startswith('%'):
+        if isinstance(listspec, str) and listspec.startswith('/'):
             listspec = listspec[1:]
             if not listspec:
                 listspec = 'all'
@@ -365,6 +366,14 @@ class PidScheduler(object):
             listspec = listspec[1:]
             def target(job):
                 return shell_join(job.cmd)
+
+        if isinstance(listspec, str) and listspec.startswith('%'):
+            listspec = listspec[1:]
+            def target(job):
+                if not job.is_alive:
+                    return ""
+                else:
+                    return str(job.process.pid)
 
         if target is None:
             def target(job):
