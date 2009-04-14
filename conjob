@@ -366,14 +366,26 @@ class PidScheduler(object):
     def jobs_iter(self, listspec, target=None):
         # -- recurse
         if not isinstance(listspec, str):
+            # union
+            items = set()
             for item in listspec:
-                for job in self.jobs_iter(item, target):
-                    yield job
+                items = items.union(set(self.jobs_iter(item, target)))
+            for item in self.jobs:
+                if item in items:
+                    yield item
             return
         elif ',' in listspec:
-            items = [x.strip() for x in listspec.split(',')]
-            for job in self.jobs_iter(items, target):
-                yield job
+            # intersection
+            items = None
+            for spec in listspec.split(','):
+                item = self.jobs_iter(spec, target)
+                if items is None:
+                    items = set(item)
+                else:
+                    items = items.intersection(set(item))
+            for item in self.jobs:
+                if item in items:
+                    yield item
             return
 
         # -- filtering and match targets
@@ -381,12 +393,16 @@ class PidScheduler(object):
         if listspec.startswith('@'):
             # match command
             listspec = listspec[1:]
+            if not listspec:
+                listspec = 'all'
             def target(job):
                 return shell_join(job.cmd)
 
         if listspec.startswith('%'):
             # match pid
             listspec = listspec[1:]
+            if not listspec:
+                listspec = 'all'
             def target(job):
                 if not job.is_alive:
                     return None
