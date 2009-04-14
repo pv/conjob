@@ -363,23 +363,33 @@ class PidScheduler(object):
 
         self._update()
 
-    def jobs_iter(self, listspec, only_completed=False, target=None):
-        if isinstance(listspec, str) and listspec.startswith('/'):
-            listspec = listspec[1:]
-            if not listspec:
-                listspec = 'all'
-            only_completed = True
+    def jobs_iter(self, listspec, target=None):
+        # -- recurse
+        if not isinstance(listspec, str):
+            for item in listspec:
+                for job in self.jobs_iter(item, target):
+                    yield job
+            return
+        elif ',' in listspec:
+            items = [x.strip() for x in listspec.split(',')]
+            for job in self.jobs_iter(items, target):
+                yield job
+            return
 
-        if isinstance(listspec, str) and listspec.startswith('@'):
+        # -- filtering and match targets
+
+        if listspec.startswith('@'):
+            # match command
             listspec = listspec[1:]
             def target(job):
                 return shell_join(job.cmd)
 
-        if isinstance(listspec, str) and listspec.startswith('%'):
+        if listspec.startswith('%'):
+            # match pid
             listspec = listspec[1:]
             def target(job):
                 if not job.is_alive:
-                    return ""
+                    return None
                 else:
                     return str(job.process.pid)
 
@@ -387,18 +397,41 @@ class PidScheduler(object):
             def target(job):
                 return job.jid
 
-        if isinstance(listspec, str) and listspec == 'all':
+        if listspec.startswith('/'):
+            # completed jobs only
+            listspec = listspec[1:]
+            if not listspec:
+                listspec = 'all'
+            def target(job, old_target=target):
+                if not job.completed:
+                    return None
+                else:
+                    return old_target(job)
+        else:
+            # no completed jobs
+            def target(job, old_target=target):
+                if job.completed:
+                    return None
+                else:
+                    return old_target(job)
+
+        if listspec.startswith('-'):
+            # failed jobs only
+            listspec = listspec[1:]
+            if not listspec:
+                listspec = 'all'
+            def target(job, old_target=target):
+                if not job.failed:
+                    return None
+                else:
+                    return old_target(job)
+
+        # -- matching
+
+        if listspec == 'all':
             listspec = '*'
 
-        if not isinstance(listspec, str):
-            for item in listspec:
-                for job in self.jobs_iter(item, only_completed, target):
-                    yield job
-        elif ',' in listspec:
-            items = [x.strip() for x in listspec.split(',')]
-            for job in self.jobs_iter(items, only_completed, target):
-                yield job
-        elif '{' in listspec:
+        if '{' in listspec:
             pat = re.compile(r'{(\d*)-(\d*)}')
             ms = list(pat.finditer(listspec))
             if not ms:
@@ -423,7 +456,13 @@ class PidScheduler(object):
             pat = re.compile(pat)
 
             for job in self.jobs:
-                jm = pat.match(target(job))
+                t = target(job)
+                if job.jid == listspec:
+                    yield job
+                    continue
+                if t is None:
+                    continue
+                jm = pat.match(t)
                 if jm:
                     ints = map(int, jm.groups())
                     ok = True
@@ -431,13 +470,14 @@ class PidScheduler(object):
                         if not min <= k <= max:
                             ok = False
                             break
-                    if ok and (only_completed is None or job.completed == only_completed):
+                    if ok:
                         yield job
         else:
             for job in self.jobs:
-                if fnmatch.fnmatch(target(job), listspec):
-                    if (only_completed is None or job.completed == only_completed or listspec == target(job)):
-                        yield job
+                t = target(job)
+                if t is not None and fnmatch.fnmatch(t, listspec) \
+                       or job.jid == listspec:
+                    yield job
 
     def redirect_to_pager(self):
         pager = self.cfg['pager']
@@ -527,7 +567,7 @@ def do_list(sched, p):
         elif job.started and not job.completed and not job.is_alive:
             mark = "/"
         elif job.failed:
-            mark = "F"
+            mark = " F"
         else:
             mark = " "
 
@@ -542,6 +582,10 @@ def do_list(sched, p):
                          end_time=end_time,
                          prio="%.2g" % job.priority,
                          cmd=cmdline))
+
+    if not rows:
+        # nothing to show
+        return
 
     # print in columns
     rowlens = dict((fld, max(len(r[fld]) for r in rows))
@@ -649,8 +693,7 @@ def do_bg_many(sched, p):
 def do_cleanup(sched, p):
     if not p.args:
         p.args = ['all']
-    to_remove = [x for x in sched.jobs_iter(p.args, only_completed=True)
-                 if x.completed]
+    to_remove = [x for x in sched.jobs_iter(p.args) if x.completed]
     for job in to_remove:
         sched.remove(job)
     sched.save_jobs()
