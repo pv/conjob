@@ -447,7 +447,27 @@ class PidScheduler(object):
         if listspec == 'all':
             listspec = '*'
 
-        if '{' in listspec:
+        if listspec.startswith('in:'):
+            fn = listspec[3:]
+            if not os.path.isfile(fn):
+                print "%s is not a file" % fn
+                raise SystemExit(1)
+
+            f = open(fn, 'r')
+            try:
+                lines = f.read().splitlines()
+            finally:
+                f.close()
+            lines = [x.strip() for x in lines if x.strip()]
+
+            patterns = [fnmatch.translate(p).replace('$', '') for p in lines]
+            pat = re.compile("|".join(patterns))
+
+            for job in self.jobs:
+                t = target(job)
+                if t is not None and pat.match(t):
+                    yield job
+        elif '{' in listspec:
             pat = re.compile(r'{(\d*)-(\d*)}')
             ms = list(pat.finditer(listspec))
             if not ms:
