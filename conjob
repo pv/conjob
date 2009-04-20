@@ -558,7 +558,7 @@ def do_setprio(sched, p):
 
     sched.save_jobs()
 
-def do_list(sched, p):
+def _get_list_jobs(sched, p):
     p2 = get_sub_optparse(p)
     p2.add_option("-s", "--sort", action="store", type="choice", dest="sort",
                   choices=['prio', 'end', 'none'], default="none",
@@ -568,8 +568,6 @@ def do_list(sched, p):
     p2.add_option("-a", "--alive", action="store_true", dest="alive_only",
                   help="show only alive processes")
     (options, args) = p2.parse_args(p.args)
-
-    sched.redirect_to_pager()
  
     if not args:
         args = ['all']
@@ -581,6 +579,15 @@ def do_list(sched, p):
     elif options.sort == 'end':
         jobs.sort(key=lambda job: job.end_time)
 
+    return [job for job in jobs
+            if not (options.running_only and not job.is_running)
+            and not (options.alive_only and not job.is_alive)]
+
+def do_list(sched, p):
+    jobs = _get_list_jobs(sched, p)
+
+    sched.redirect_to_pager()
+
     # format data
     fields = ['jid', 'pid', 'end_time', 'prio', 'cmd']
     formats = dict(jid='%-Ns', prio='%Ns', cmd='%-Ns', pid='%Ns',
@@ -588,11 +595,6 @@ def do_list(sched, p):
 
     rows = []
     for job in jobs:
-        if options.running_only and not job.is_running:
-            continue
-        if options.alive_only and not job.is_alive:
-            continue
-
         pid = ""
         if job.is_running:
             mark = "*"
@@ -634,6 +636,52 @@ def do_list(sched, p):
             print " ".join(len_formats[fld] % row[fld] for fld in fields)
     except IOError:
         pass
+
+def do_info(sched, p):
+    jobs = _get_list_jobs(sched, p)
+    
+    sched.redirect_to_pager()
+ 
+    for job in jobs:
+        info = dict(
+            jid=job.jid,
+            cmd=shell_join(job.cmd),
+            priority=job.priority,
+            queue_time=job.queue_time.strftime(Job.date_format),
+            running=job.is_running and "*" or ""
+            )
+        if job.start_time:
+            info['start_time'] = job.start_time.strftime(Job.date_format)
+        else:
+            info['start_time'] = 'not started'
+        if job.end_time:
+            info['end_time'] = job.end_time.strftime(Job.date_format)
+            dt = job.end_time - job.start_time
+            info['duration'] = fmt_time(secs(dt))
+        else:
+            info['end_time'] = 'not completed'
+            if job.start_time:
+                dt = datetime.datetime.now() - job.start_time
+                info['duration'] = fmt_time(secs(dt))
+            else:
+                info['duration'] = '--'
+        if job.process:
+            info['pid'] = 'pid %d' % job.process.pid
+        else:
+            info['pid'] = 'not running'
+        s = (("""
+Job:      %(jid)s  [prio: %(priority)s, %(pid)s%(running)s]
+Cmd:      %(cmd)s
+Queued:   %(queue_time)s
+Start:    %(start_time)s
+End:      %(end_time)s
+Duration: %(duration)s
+
+""".strip() % info) + "\n")
+        try:
+            print s
+        except IOError:
+            return
 
 
 def do_kill(sched, p):
@@ -762,9 +810,6 @@ def do_stats(sched, p):
     failed_run_time = []
     total = len(jobs)
 
-    def secs(dt):
-        return 60*60*24*dt.days + dt.seconds + 1e-6*dt.microseconds
-
     for job in jobs:
         if job.started:
             queue_time.append(secs(job.start_time - job.queue_time))
@@ -779,38 +824,6 @@ def do_stats(sched, p):
                     failed_run_time.append(rt)
                 else:
                     run_time.append(rt)
-
-    def fmt_time(dt):
-        if not np.isfinite(dt):
-            return "--"
-        elif dt < 60:
-            return "%.1f sec" % dt
-        elif dt < 60*60:
-            mins, secs = divmod(dt, 60)
-            return "%d min %d sec" % (mins, secs)
-        elif dt < 60*60*24:
-            hours, secs = divmod(dt, 60*60)
-            mins = round(secs/60.)
-            return "%d h %d min" % (hours, mins)
-        else:
-            days, secs = divmod(dt, 60*60*24)
-            hours = round(secs/3600.)
-            return "%d days %d hours" % (days, hours)
-
-    def fmt_time_short(dt):
-        if not np.isfinite(dt):
-            return "--"
-        elif dt < 60:
-            return "%.1f sec" % dt
-        elif dt < 60*60:
-            mins, secs = divmod(dt, 60)
-            return "%d min" % mins
-        elif dt < 60*60*24:
-            hours, secs = divmod(dt, 60*60)
-            return "%d h" % hours
-        else:
-            days, secs = divmod(dt, 60*60*24)
-            return "%d days" % days
 
     def xval(v):
         if not v: return [np.nan]
@@ -890,6 +903,42 @@ Estimated completion time (based on selected completed jobs)
            )
     print msg
 
+def secs(dt):
+    return 60*60*24*dt.days + dt.seconds + 1e-6*dt.microseconds
+
+def fmt_time(dt):
+    if dt != dt:
+        return "--"
+    elif dt < 60:
+        return "%.1f sec" % dt
+    elif dt < 60*60:
+        mins, secs = divmod(dt, 60)
+        return "%d min %d sec" % (mins, secs)
+    elif dt < 60*60*24:
+        hours, secs = divmod(dt, 60*60)
+        mins = round(secs/60.)
+        return "%d h %d min" % (hours, mins)
+    else:
+        days, secs = divmod(dt, 60*60*24)
+        hours = round(secs/3600.)
+        return "%d days %d hours" % (days, hours)
+
+def fmt_time_short(dt):
+    if not np.isfinite(dt):
+        return "--"
+    elif dt < 60:
+        return "%.1f sec" % dt
+    elif dt < 60*60:
+        mins, secs = divmod(dt, 60)
+        return "%d min" % mins
+    elif dt < 60*60*24:
+        hours, secs = divmod(dt, 60*60)
+        return "%d h" % hours
+    else:
+        days, secs = divmod(dt, 60*60*24)
+        return "%d days" % days
+
+
 def main(argv):
     p = optparse.OptionParser(__doc__.strip())
     p.allow_interspersed_args = False
@@ -914,7 +963,8 @@ def main(argv):
                 requeue=do_requeue,
                 dump_jobs=do_dump_jobs,
                 load_jobs=do_load_jobs,
-                stats=do_stats)
+                stats=do_stats,
+                info=do_info)
 
     cmd = args.pop(0)
     func = cmds.get(cmd)
@@ -1228,6 +1278,9 @@ def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
 
     if fmt_label is None:
         fmt_label = lambda x: "%g" % x
+        
+    if hist.max() == 0:
+        return ""
 
     scale = ncols / float(hist.max())
 
