@@ -130,7 +130,7 @@ class Job(object):
         if self.completed:
             return
         if self.process:
-            if not self.process.is_running:
+            if not self.process.is_running and self.is_alive:
                 self.process.resume()
             return
 
@@ -652,8 +652,11 @@ def do_info(sched, p):
             )
         if job.start_time:
             info['start_time'] = job.start_time.strftime(Job.date_format)
+            dt = job.start_time - job.queue_time
+            info['waited'] = fmt_time(secs(dt))
         else:
             info['start_time'] = 'not started'
+            info['waited'] = '--'
         if job.end_time:
             info['end_time'] = job.end_time.strftime(Job.date_format)
             dt = job.end_time - job.start_time
@@ -675,6 +678,7 @@ Cmd:      %(cmd)s
 Queued:   %(queue_time)s
 Start:    %(start_time)s
 End:      %(end_time)s
+Waited:   %(waited)s
 Duration: %(duration)s
 
 """.strip() % info) + "\n")
@@ -924,7 +928,7 @@ def fmt_time(dt):
         return "%d days %d hours" % (days, hours)
 
 def fmt_time_short(dt):
-    if not np.isfinite(dt):
+    if dt != dt:
         return "--"
     elif dt < 60:
         return "%.1f sec" % dt
