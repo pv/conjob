@@ -1210,6 +1210,7 @@ class KillWatch(object):
         for process in self.queue:
             if process.is_alive:
                 process.kill(signal.SIGKILL)
+                process.kill(signal.SIGKILL)
         del self.queue[:]
 
 #------------------------------------------------------------------------------
