@@ -698,10 +698,12 @@ def do_kill(sched, p):
 
 def do_requeue(sched, p):
     watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
-    for job in sched.jobs_iter(p.args):
+    jobs = list(sched.jobs_iter(p.args))
+    for job in jobs:
         watch.kill(job)
-        job.reset()
     watch.flush()
+    for job in jobs:
+        job.reset()
     sched._update()
     sched.save_jobs()
 
