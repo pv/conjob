@@ -1012,7 +1012,7 @@ class Process(object):
             try:
                 lines = f.read().split("\n")
                 for line in lines:
-                    m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                    m = re.match(r'^VmRSS:\s*(\d+) kB$', line)
                     if m:
                         return float(m.group(1))
             finally:
