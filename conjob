@@ -29,6 +29,7 @@ Commands:
 
 """
 import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
+import fcntl
 import datetime, subprocess, atexit
 import configobj
 import cPickle as pickle
@@ -542,9 +543,17 @@ def do_schedule(sched, p):
     else:
         p.error("invalid number of arguments")
 
-    for k in xrange(count):
-        sched.schedule()
-    sched.save_jobs()
+    # With lockfile
+    lock = open(CFGFILE + ".lock", "a")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+
+        for k in xrange(count):
+            sched.schedule()
+        sched.save_jobs()
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 def do_setprio(sched, p):
     try:
