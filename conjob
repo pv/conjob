@@ -197,10 +197,23 @@ class PidScheduler(object):
         self.cfg['logdir'] = str(self.cfg['logdir'])
         self.cfg['pager'] = str(self.cfg['pager'])
         self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
+        self.lockfile = open(CFGFILE + ".lock", "a")
+        self.lock_count = 0
         self.load_jobs()
 
         if not os.path.isdir(self.cfg['logdir']):
             os.makedirs(self.cfg['logdir'])
+
+    def lock(self):
+        fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_EX)
+        self.lock_count += 1
+
+    def unlock(self):
+        if self.lock_count <= 1:
+            fcntl.flock(self.lockfile.fileno(), fcntl.LOCK_UN)
+            self.lock_count = 0
+        else:
+            self.lock_count -= 1
 
     def load_jobs_cfg(self, stream):
         cfg = configobj.ConfigObj(stream)
@@ -217,31 +230,39 @@ class PidScheduler(object):
         cfg.write(stream)
 
     def load_jobs(self):
-        fn = self.cfg['joblist']
-        if os.path.exists(fn):
-            f = open(fn, 'rb')
-            try:
-                self.jobs = pickle.load(f)
-            finally:
-                f.close()
-        for job in self.jobs:
-            job.update()
+        self.lock()
+        try:
+            fn = self.cfg['joblist']
+            if os.path.exists(fn):
+                f = open(fn, 'rb')
+                try:
+                    self.jobs = pickle.load(f)
+                finally:
+                    f.close()
+            for job in self.jobs:
+                job.update()
+        finally:
+            self.unlock()
 
     def save_jobs(self):
         # avoid write races by writing to a temp file and overwriting
         # by moving (which probably is atomic within a FS)
-        fd, tmp_fn = tempfile.mkstemp(
+        self.lock()
+        try:
+            fd, tmp_fn = tempfile.mkstemp(
                 prefix=os.path.basename(self.cfg['joblist']) + '-',
                 dir=os.path.dirname(self.cfg['joblist']))
-        os.close(fd)
+            os.close(fd)
 
-        f = open(tmp_fn, 'wb')
-        try:
-            pickle.dump(self.jobs, f)
+            f = open(tmp_fn, 'wb')
+            try:
+                pickle.dump(self.jobs, f)
+            finally:
+                f.close()
+
+            shutil.move(tmp_fn, self.cfg['joblist'])
         finally:
-            f.close()
-
-        shutil.move(tmp_fn, self.cfg['joblist'])
+            self.unlock()
 
     def get_free_jid(self, prefix=""):
         if prefix:
@@ -268,7 +289,7 @@ class PidScheduler(object):
         return logfile_fn
 
     def save(self):
-        self.save_pids()
+        self.save_jobs()
 
     def add(self, cmd, prefix=None, priority=0.):
         jid = self.get_free_jid(prefix)
@@ -316,7 +337,13 @@ class PidScheduler(object):
         return v
 
     def schedule(self):
+        self.lock()
+        try:
+            self._schedule()
+        finally:
+            self.unlock()
 
+    def _schedule(self):
         # Check status
         self._update()
 
@@ -527,7 +554,16 @@ class PidScheduler(object):
         except OSError:
             pass
 
+def sched_locked(func):
+    def wrapper(sched, p):
+        sched.lock()
+        try:
+            return func(sched, p)
+        finally:
+            sched.unlock()
+    return wrapper
 
+@sched_locked
 def do_schedule(sched, p):
     if len(p.args) == 0:
         count = 1
@@ -541,18 +577,11 @@ def do_schedule(sched, p):
     else:
         p.error("invalid number of arguments")
 
-    # With lockfile
-    lock = open(CFGFILE + ".lock", "a")
-    try:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    for k in xrange(count):
+        sched.schedule()
+    sched.save_jobs()
 
-        for k in xrange(count):
-            sched.schedule()
-        sched.save_jobs()
-    finally:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        lock.close()
-
+@sched_locked
 def do_setprio(sched, p):
     try:
         prio = p.args.pop(-1)
@@ -694,7 +723,7 @@ Duration: %(duration)s
         except IOError:
             return
 
-
+@sched_locked
 def do_kill(sched, p):
     watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
     for job in sched.jobs_iter(p.args):
@@ -703,6 +732,7 @@ def do_kill(sched, p):
     sched._update()
     sched.save_jobs()
 
+@sched_locked
 def do_requeue(sched, p):
     watch = KillWatch(nprocs=(1+sched.cfg['nprocs']//2))
     jobs = list(sched.jobs_iter(p.args))
@@ -756,7 +786,7 @@ def get_run_optparse(p, doc=None):
                   dest='prefix', default=None,
                   help="Prefix for the JIDs of the jobs")
     return p2
-    
+
 def do_run(sched, p):
     p2 = get_run_optparse(p)
     (options, args) = p2.parse_args(p.args)
@@ -765,6 +795,7 @@ def do_run(sched, p):
                           priority=options.priority)
     # doesn't return
 
+@sched_locked
 def do_bg(sched, p):
     p2 = get_run_optparse(p)
     (options, args) = p2.parse_args(p.args)
@@ -772,6 +803,7 @@ def do_bg(sched, p):
     sched.add(args, prefix=options.prefix, priority=options.priority)
     sched.save_jobs()
 
+@sched_locked
 def do_bg_many(sched, p):
     p2 = get_run_optparse(p)
     (options, args) = p2.parse_args(p.args)
@@ -787,6 +819,7 @@ def do_bg_many(sched, p):
         sched.add(cmd, prefix=options.prefix, priority=options.priority)
     sched.save_jobs()
 
+@sched_locked
 def do_cleanup(sched, p):
     if not p.args:
         p.args = ['all']
@@ -795,6 +828,7 @@ def do_cleanup(sched, p):
         sched.remove(job)
     sched.save_jobs()
 
+@sched_locked
 def do_dump_jobs(sched, p):
     if len(p.args) == 0:
         sched.dump_jobs_cfg(sys.stdout)
@@ -803,6 +837,7 @@ def do_dump_jobs(sched, p):
     else:
         p.error('invalid number of arguments')
 
+@sched_locked
 def do_load_jobs(sched, p):
     if len(p.args) == 0:
         sched.load_jobs_cfg(sys.stdout)
