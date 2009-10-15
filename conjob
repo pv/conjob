@@ -59,8 +59,7 @@ class Job(object):
         return datetime.datetime.strptime(s, cls.date_format)
 
     def update(self):
-        if self.process and not self.process.is_alive:
-            self.process = None
+        self._update_alive_state()
 
     @classmethod
     def from_section(cls, section):
@@ -69,8 +68,6 @@ class Job(object):
         pid = section.get('pid', None)
         if pid is not None:
             self.process = Process(int(pid))
-            if not self.process.is_alive:
-                self.process = None
         self.cmd = section['cmd']
         self.cwd = section.get('cwd', None)
         self.log_file = section['log_file']
@@ -80,6 +77,7 @@ class Job(object):
             self.start_time = cls._strptime(section['start_time'])
         self.queue_time = cls._strptime(section['queue_time'])
         self.priority = float(section.get('priority', 0.))
+        self._update_alive_state()
         return self
 
     def as_section(self):
