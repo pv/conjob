@@ -976,7 +976,9 @@ def main(argv):
                 requeue=do_requeue,
                 dump_jobs=do_dump_jobs,
                 load_jobs=do_load_jobs,
+                status=do_stats,
                 stats=do_stats,
+                stat=do_stats,
                 info=do_info)
 
     cmd = args.pop(0)
