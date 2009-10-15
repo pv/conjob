@@ -1170,7 +1170,7 @@ class Process(object):
         # capture return code
         while True:
             try:
-                pid, ret = os.wait()
+                pid, ret = os.waitpid(pid, 0)
                 break
             except KeyboardInterrupt:
                 pass
