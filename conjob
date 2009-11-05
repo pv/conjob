@@ -1094,10 +1094,11 @@ class Process(object):
 
     @staticmethod
     def get_loadavg():
+        """5 minute load average"""
         f = open('/proc/loadavg', 'r')
         try:
             data = f.read()
-            return float(data.split()[0])
+            return float(data.split()[1])
         finally:
             f.close()
 
