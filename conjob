@@ -354,8 +354,8 @@ class PidScheduler(object):
 
         # Adjust according to load average
         running = len([z for z in queue if z.is_running])
-        max_nprocs = running + int(round(self.cfg['loadavg']
-                                         - Process.get_loadavg()))
+        total_running = min(Process.get_loadavg(), Process.get_num_running()-1)
+        max_nprocs = running + int(round(self.cfg['loadavg'] - total_running))
         max_nprocs = max(1, max_nprocs)
         nprocs = min(nprocs, max_nprocs)
 
@@ -1099,6 +1099,18 @@ class Process(object):
         try:
             data = f.read()
             return float(data.split()[0])
+        finally:
+            f.close()
+
+    @staticmethod
+    def get_num_running():
+        """Number of currently running processes (likely including this one)"""
+        f = open('/proc/stat', 'r')
+        try:
+            for line in f:
+                if line.startswith('procs_running '):
+                    return int(line[14:])
+            raise RuntimeError("Couldn't get the number of running processes")
         finally:
             f.close()
 
