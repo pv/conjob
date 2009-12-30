@@ -380,10 +380,12 @@ class PidScheduler(object):
         to_stop = queue[nprocs:]
 
         resumed = False
+        skipped = 0
 
         for cpu, job in enumerate(to_run):
             if vm_exhausted and not job.is_alive:
                 # don't start new jobs if VM is exhausted
+                skipped += 1
                 continue
 
             if not job.is_running and not resumed:
@@ -393,6 +395,12 @@ class PidScheduler(object):
             job.set_cpu_affinity(["0xff"])
 
         for job in to_stop:
+            if vm_exhausted and skipped > 0 and job.is_alive and not resumed:
+                # under VM exhaustion, run any existing processes to completion
+                job.resume()
+                skipped -= 1
+                resumed = True
+                continue
             job.suspend()
 
         self._update()
