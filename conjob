@@ -371,6 +371,10 @@ class PidScheduler(object):
                 nprocs = j
                 break
 
+        # Avoid virtual memory exhaustion
+        vm_exhausted = (Process.get_free_swap()
+                        < 0.3*Process.get_total_swap())
+
         # Stop / continue
         to_run = queue[:nprocs]
         to_stop = queue[nprocs:]
@@ -378,8 +382,12 @@ class PidScheduler(object):
         resumed = False
 
         for cpu, job in enumerate(to_run):
+            if vm_exhausted and not job.is_alive:
+                # don't start new jobs if VM is exhausted
+                continue
+
             if not job.is_running and not resumed:
-                # only resume one job per schedule cycle
+                # only resume one job per schedule cycle.
                 job.run(nice=self.cfg['nice'], ioprio=self.cfg['ioprio'])
                 resumed = True
             job.set_cpu_affinity(["0xff"])
@@ -1064,6 +1072,21 @@ class Process(object):
         return 0
 
     @property
+    def vm_size(self):
+        dr = '/proc/%d' % self.pid
+        if os.path.isdir(dr):
+            f = open('%s/status' % dr)
+            try:
+                lines = f.read().split("\n")
+                for line in lines:
+                    m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                    if m:
+                        return float(m.group(1))
+            finally:
+                f.close()
+        return 0
+
+    @property
     def is_running(self):
         dr = '/proc/%d' % self.pid
         if os.path.isdir(dr):
@@ -1133,6 +1156,32 @@ class Process(object):
             lines = f.read().split("\n")
             for line in lines:
                 m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
+                if m:
+                    return float(m.group(1))
+        finally:
+            f.close()
+        return 1e99
+
+    @staticmethod
+    def get_total_swap():
+        f = open('/proc/meminfo', 'r')
+        try:
+            lines = f.read().split("\n")
+            for line in lines:
+                m = re.match(r'^SwapTotal:\s*(\d+) kB$', line)
+                if m:
+                    return float(m.group(1))
+        finally:
+            f.close()
+        return 1e99
+
+    @staticmethod
+    def get_free_swap():
+        f = open('/proc/meminfo', 'r')
+        try:
+            lines = f.read().split("\n")
+            for line in lines:
+                m = re.match(r'^SwapFree:\s*(\d+) kB$', line)
                 if m:
                     return float(m.group(1))
         finally:
