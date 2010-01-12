@@ -189,6 +189,8 @@ class PidScheduler(object):
         self.cfg.setdefault('loadavg', 2)
         self.cfg.setdefault('max_mem_percentage', 75)
         self.cfg.setdefault('pager', None)
+        self.cfg.setdefault('min_vm_free', 1e9)
+        self.cfg['min_vm_free'] = float(self.cfg['min_vm_free'])
         self.cfg['nice'] = int(self.cfg['nice'])
         self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
@@ -360,8 +362,10 @@ class PidScheduler(object):
         nprocs = min(nprocs, max_nprocs)
 
         # Adjust according to memory usage
+        mem_factor = self.cfg['max_mem_percentage'] / 100.
+
         total_mem = Process.get_total_mem()
-        mem_max = total_mem * self.cfg['max_mem_percentage'] / 100.
+        mem_max = total_mem * mem_factor
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
                 mem_max -= job.process.mem_used
@@ -372,8 +376,10 @@ class PidScheduler(object):
                 break
 
         # Avoid virtual memory exhaustion
-        vm_exhausted = (Process.get_free_swap()
-                        < 0.3*Process.get_total_swap())
+        vm_free = Process.get_free_mem() + Process.get_free_swap()
+        vm_total = Process.get_total_mem() + Process.get_total_swap()
+        vm_min = min(self.cfg['min_vm_free']/1024., (1 - mem_factor)*vm_total)
+        vm_exhausted = (vm_free < vm_min)
 
         # Stop / continue
         to_run = queue[:nprocs]
@@ -1159,42 +1165,35 @@ class Process(object):
 
     @staticmethod
     def get_total_mem():
-        f = open('/proc/meminfo', 'r')
-        try:
-            lines = f.read().split("\n")
-            for line in lines:
-                m = re.match(r'^MemTotal:\s*(\d+) kB$', line)
-                if m:
-                    return float(m.group(1))
-        finally:
-            f.close()
-        return 1e99
+        return Process._meminfo().get('MemTotal', 1e99)
+
+    @staticmethod
+    def get_free_mem():
+        info = Process._meminfo()
+        return (info.get('MemFree', 1e99) + info.get('Cached', 0)
+                + info.get('Buffers', 0))
 
     @staticmethod
     def get_total_swap():
-        f = open('/proc/meminfo', 'r')
-        try:
-            lines = f.read().split("\n")
-            for line in lines:
-                m = re.match(r'^SwapTotal:\s*(\d+) kB$', line)
-                if m:
-                    return float(m.group(1))
-        finally:
-            f.close()
-        return 1e99
+        return Process._meminfo().get('SwapTotal', 1e99)
 
     @staticmethod
     def get_free_swap():
+        return Process._meminfo().get('SwapFree', 1e99)
+
+    @staticmethod
+    def _meminfo():
         f = open('/proc/meminfo', 'r')
         try:
             lines = f.read().split("\n")
+            info = {}
             for line in lines:
-                m = re.match(r'^SwapFree:\s*(\d+) kB$', line)
+                m = re.match(r'^([a-zA-Z]+):\s*(\d+) kB$', line)
                 if m:
-                    return float(m.group(1))
+                    info[m.group(1)] = float(m.group(2))
+            return info
         finally:
             f.close()
-        return 1e99
 
     @classmethod
     def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None,
