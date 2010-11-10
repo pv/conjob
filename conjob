@@ -1243,14 +1243,6 @@ class Process(object):
                  msg="", failfile=None, pid_pipe=None):
         self = cls(os.getpid())
 
-        # renice
-        if nice is not None:
-            os.nice(nice)
-        if ioprio is not None:
-            self.set_ioprio(ioprio)
-        if cwd:
-            os.chdir(cwd)
-
         if stop:
             self.suspend()
 
@@ -1264,7 +1256,21 @@ class Process(object):
         if failfile and os.path.isfile(failfile):
             os.unlink(failfile)
 
-        pid = os.spawnvp(os.P_NOWAIT, cmd[0], cmd)
+        try:
+            # prepare environment
+            if nice is not None:
+                os.nice(nice)
+            if ioprio is not None:
+                self.set_ioprio(ioprio)
+            if cwd:
+                os.chdir(cwd)
+            # run
+            pid = os.spawnvp(os.P_NOWAIT, cmd[0], cmd)
+            ret = 0
+        except:
+            # spawning failed!
+            pid = os.getpid()
+            ret = -1
 
         # deliver pid info to the parent
         if pid_pipe is not None:
@@ -1272,7 +1278,7 @@ class Process(object):
             os.close(pid_pipe)
 
         # capture return code
-        while True:
+        while True and ret == 0:
             try:
                 pid, ret = os.waitpid(pid, 0)
                 break
