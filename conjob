@@ -195,7 +195,6 @@ class PidScheduler(object):
         self.cfg['ioprio'] = int(self.cfg['ioprio'])
         self.cfg['nprocs'] = int(self.cfg['nprocs'])
         self.cfg['loadavg'] = float(self.cfg['loadavg'])
-        self.cfg['pidlist'] = str(self.cfg['pidlist'])
         self.cfg['logdir'] = str(self.cfg['logdir'])
         self.cfg['pager'] = str(self.cfg['pager'])
         self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
