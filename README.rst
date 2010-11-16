@@ -45,3 +45,21 @@ Synopsis
     Prepending '/' to the pattern makes it match also completed jobs,
     '@' the command lines, '%' the PIDs.
 
+Configuration
+-------------
+
+Configuration goes into ``~/.conjob``::
+
+  # Max number of simultaneous processes
+  nprocs = 8
+  # Max load average
+  loadavg = 8.0
+  # Nice of processes
+  nice = 20
+  # Maximum amount of memory to hog
+  max_mem_percentage = 75
+  # Minimum free virtual memory (avoid swapping)
+  min_vm_free = 3e9
+  # Pager
+  pager = less -S +k
+
