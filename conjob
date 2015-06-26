@@ -1212,6 +1212,19 @@ class Process(object):
     @classmethod
     def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None,
                            cwd=None, msg=""):
+        """
+        Fork command to background.
+
+        Creates two subprocesses::
+
+           watcher (daemonized)
+           \- cmd  (new process group leader)
+
+        The watcher process is responsible for saving the command return code
+        status. PID+PGID of cmd are used for job control in later calls to
+        conjob schedule.
+
+        """
         (pid_pipe_r, pid_pipe_w) = os.pipe()
 
         # 1st fork
