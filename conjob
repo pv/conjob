@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.5
+#!/usr/bin/env python
 # -*-python-*-
 """
 conjob [options] COMMAND [...]
@@ -66,8 +66,11 @@ class Job(object):
         self = Job(None, None, None)
         self.jid = str(section['jid'])
         pid = section.get('pid', None)
+        pgid = section.get('pgid', None)
         if pid is not None:
-            self.process = Process(int(pid))
+            if pgid is not None:
+                pgid = int(pgid)
+            self.process = Process(int(pid), pgid)
         self.cmd = section['cmd']
         self.cwd = section.get('cwd', None)
         self.log_file = section['log_file']
@@ -1053,21 +1056,29 @@ def main(argv):
 #------------------------------------------------------------------------------
 
 class Process(object):
-    def __init__(self, pid):
+    def __init__(self, pid, pgid=None):
         self.pid = pid
+        self.pgid = pgid
 
     def kill(self, sig=None):
-        if sig is None:
-            os.kill(self.pid, signal.SIGINT)
-            os.kill(self.pid, signal.SIGTERM)
+        if self.pgid is not None:
+            if sig is None:
+                os.killpg(self.pgid, signal.SIGINT)
+                os.killpg(self.pgid, signal.SIGTERM)
+            else:
+                os.killpg(self.pgid, sig)
         else:
-            os.kill(self.pid, sig)
+            if sig is None:
+                os.kill(self.pid, signal.SIGINT)
+                os.kill(self.pid, signal.SIGTERM)
+            else:
+                os.kill(self.pid, sig)
 
     def suspend(self):
-        os.kill(self.pid, signal.SIGSTOP)
+        self.kill(signal.SIGSTOP)
 
     def resume(self):
-        os.kill(self.pid, signal.SIGCONT)
+        self.kill(signal.SIGCONT)
 
     @property
     def mem_used(self):
@@ -1206,7 +1217,7 @@ class Process(object):
             pid = int(os.read(pid_pipe_r, 64))
             os.close(pid_pipe_r)
             os.close(pid_pipe_w)
-            return cls(pid)
+            return cls(pid, pgid=pid)
 
         # invoke in background
         os.setsid()
@@ -1235,11 +1246,12 @@ class Process(object):
 
         # run
         cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, stop=False, msg=msg,
-                     cwd=cwd, failfile=failfile, pid_pipe=pid_pipe_w)
+                     cwd=cwd, failfile=failfile, pid_pipe=pid_pipe_w,
+                     setpgid=True)
 
     @classmethod
     def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=None,
-                 msg="", failfile=None, pid_pipe=None):
+                 msg="", failfile=None, pid_pipe=None, setpgid=False):
         self = cls(os.getpid())
 
         if stop:
@@ -1264,7 +1276,11 @@ class Process(object):
             if cwd:
                 os.chdir(cwd)
             # run
-            pid = os.spawnvp(os.P_NOWAIT, cmd[0], cmd)
+            if setpgid:
+                proc = subprocess.Popen(cmd, preexec_fn=lambda: os.setpgid(0, 0))
+                pid = proc.pid
+            else:
+                pid = os.spawnvp(os.P_NOWAIT, cmd[0], cmd)
             ret = 0
         except:
             # spawning failed!
@@ -1291,7 +1307,7 @@ class Process(object):
         sys.exit(0)
 
     def __repr__(self):
-        return "<Process %d>" % self.pid
+        return "<Process %d (pgid %r)>" % (self.pid, self.pgid)
 
 class KillWatch(object):
     def __init__(self, nprocs):
