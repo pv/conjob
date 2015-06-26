@@ -307,6 +307,7 @@ class PidScheduler(object):
         job = self.add(cmd, prefix=prefix, priority=priority)
         job.process = Process(os.getpid())
         job.start_time = datetime.datetime.now()
+        job.set_cpu_affinity(["0xff"])
         self.save_jobs()
         Process.exec_cmd(cmd,
                          nice=self.cfg['nice'],
