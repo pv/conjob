@@ -88,6 +88,9 @@ class Job(object):
         section['jid'] = self.jid
         if self.process is not None and self.process.is_alive:
             section['pid'] = self.process.pid
+            pgid = getattr(self.process, 'pgid', None)
+            if pgid is not None:
+                section['pgid'] = pgid
         if self.start_time is not None:
             section['start_time'] = self.start_time
         section['cmd'] = self.cmd
@@ -1062,7 +1065,7 @@ class Process(object):
         self.pgid = pgid
 
     def kill(self, sig=None):
-        if self.pgid is not None:
+        if getattr(self, 'pgid', None) is not None:
             if sig is None:
                 os.killpg(self.pgid, signal.SIGINT)
                 os.killpg(self.pgid, signal.SIGTERM)
@@ -1308,7 +1311,7 @@ class Process(object):
         sys.exit(0)
 
     def __repr__(self):
-        return "<Process %d (pgid %r)>" % (self.pid, self.pgid)
+        return "<Process %d (pgid %r)>" % (self.pid, getattr(self, 'pgid', None))
 
 class KillWatch(object):
     def __init__(self, nprocs):
