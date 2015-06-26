@@ -17,6 +17,7 @@ Commands:
   kill JIDS           Kill jobs
   tail JIDS           Tail -f logfiles
   less JIDS           Page through logfiles
+  stats JIDS          Display job statistics
   cleanup JIDS        Remove completed jobs from the job list
   requeue JIDS        Kill and re-queue given jobs
   dump_jobs [FILE]    Dump a job listing to FILE or stdout
@@ -1430,7 +1431,7 @@ def ascii_hist(x, fmt_label=None, bins=6, logbins=True):
         if x.min() == 0:
             bins[0] = 0
 
-    hist, edges = np.histogram(x, bins=bins, new=True)
+    hist, edges = np.histogram(x, bins=bins)
 
     ncols = 40
     rows = []
