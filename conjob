@@ -311,7 +311,7 @@ class PidScheduler(object):
         job = self.add(cmd, prefix=prefix, priority=priority)
         job.process = Process(os.getpid())
         job.start_time = datetime.datetime.now()
-        job.set_cpu_affinity(["0xff"])
+        job.set_cpu_affinity(list(range(os.cpu_count())))
         self.save_jobs()
         Process.exec_cmd(cmd,
                          nice=self.cfg['nice'],
@@ -405,7 +405,7 @@ class PidScheduler(object):
                 # only resume one job per schedule cycle.
                 job.run(nice=self.cfg['nice'], ioprio=self.cfg['ioprio'])
                 resumed = True
-            job.set_cpu_affinity(["0xff"])
+            job.set_cpu_affinity(list(range(os.cpu_count())))
 
         for job in to_stop:
             if vm_exhausted and skipped > 0 and job.is_alive and not resumed:
@@ -1140,9 +1140,7 @@ class Process(object):
 
     def set_cpu_affinity(self, cpus=[0]):
         if self.is_alive:
-            subprocess.call(['schedtool', '-a', ",".join(map(str, cpus)),
-                             str(self.pid)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            os.sched_setaffinity(self.pid, list(cpus))
 
     @staticmethod
     def get_loadavg():
