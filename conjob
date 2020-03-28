@@ -380,7 +380,7 @@ class PidScheduler(object):
         mem_max = total_mem * mem_factor
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
-                mem_max -= job.process.vm_size
+                mem_max -= job.process.vm_peak
             else:
                 mem_max -= 0.05 * total_mem
             if mem_max < 0 and j > 0:
@@ -1106,14 +1106,14 @@ class Process(object):
         return 0
 
     @property
-    def vm_size(self):
+    def vm_peak(self):
         dr = '/proc/%d' % self.pid
         if os.path.isdir(dr):
             f = open('%s/status' % dr)
             try:
                 lines = f.read().split("\n")
                 for line in lines:
-                    m = re.match(r'^VmSize:\s*(\d+) kB$', line)
+                    m = re.match(r'^VmPeak:\s*(\d+) kB$', line)
                     if m:
                         return float(m.group(1))
             finally:
