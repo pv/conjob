@@ -31,6 +31,7 @@ Commands:
 """
 import os, sys, time, optparse, signal, tempfile, shutil, re, fnmatch
 import fcntl
+import json
 import datetime, subprocess, atexit
 import configparser
 import pickle
@@ -229,18 +230,23 @@ class PidScheduler(object):
             self.lock_count -= 1
 
     def load_jobs_cfg(self, stream):
-        cfg = configobj.ConfigObj(stream)
-        for key, value in cfg.items():
+        if isinstance(stream, str):
+            with open(stream, 'r') as f:
+                return self.load_jobs_cfg(f)
+
+        sections = json.load(stream)
+        for key, value in sections.items():
             self.jobs.append(Job.from_section(value))
 
     def dump_jobs_cfg(self, stream):
-        cfg = configobj.ConfigObj()
         if isinstance(stream, str):
-            cfg.filename = stream
-            stream = None
+            with open(stream, 'w') as f:
+                return self.dump_jobs_cfg(f)
+
+        sections = {}
         for job in self.jobs:
-            cfg[job.jid] = job.as_section()
-        cfg.write(stream)
+            sections[job.jid] = job.as_section()
+        json.dump(sections, stream, indent=' '*2)
 
     def load_jobs(self):
         self.lock()
