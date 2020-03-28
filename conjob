@@ -35,6 +35,7 @@ import json
 import datetime, subprocess, atexit
 import configparser
 import pickle
+import resource
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -133,7 +134,7 @@ class Job(object):
         if self.is_alive:
             self.process.set_cpu_affinity(cpus)
 
-    def run(self, nice=None, ioprio=None):
+    def run(self, nice=None, ioprio=None, ulimit_mem_percentage=None):
         if self.completed:
             return
         if self.process:
@@ -146,6 +147,7 @@ class Job(object):
         self.process = Process.fork_to_background(self.cmd, self.log_file,
                                                   cwd=self.cwd,
                                                   ioprio=ioprio, nice=nice,
+                                                  ulimit_mem_percentage=ulimit_mem_percentage,
                                                   msg="Job %s" % self.jid)
 
     @property
@@ -196,7 +198,8 @@ class PidScheduler(object):
             'nice': 10,
             'ioprio': 7,
             'loadavg': 2.0,
-            'max_mem_percentage': 75,
+            'max_mem_percentage': 75.0,
+            'ulimit_mem_percentage': 100.0,
             'pager': '',
         }
 
@@ -326,6 +329,7 @@ class PidScheduler(object):
         Process.exec_cmd(cmd,
                          nice=self.cfg['nice'],
                          ioprio=self.cfg['ioprio'],
+                         ulimit_mem_percentage=self.cfg['ulimit_mem_percentage'],
                          stop=True,
                          msg="Job %s" % job.jid)
 
@@ -406,7 +410,9 @@ class PidScheduler(object):
 
             if not job.is_running and not resumed:
                 # only resume one job per schedule cycle.
-                job.run(nice=self.cfg['nice'], ioprio=self.cfg['ioprio'])
+                job.run(nice=self.cfg['nice'],
+                        ioprio=self.cfg['ioprio'],
+                        ulimit_mem_percentage=self.cfg['ulimit_mem_percentage'])
                 resumed = True
                 some_job_running = True
             elif job.is_running:
@@ -1145,6 +1151,15 @@ class Process(object):
             subprocess.call(['ionice', '-p', str(self.pid), '-n', str(ioprio)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+    def set_ulimit_mem_percentage(self, ulimit_mem_percentage=100):
+        """Set VM address space ulimit"""
+        if self.is_alive:
+            limit_as = Process.get_total_mem() * 1024 * ulimit_mem_percentage / 100
+            ulimit = resource.prlimit(self.pid, resource.RLIMIT_AS)
+            ulimit = (int(limit_as if ulimit[0] < 0 else min(ulimit[0], limit_as)),
+                      ulimit[1])
+            resource.prlimit(self.pid, resource.RLIMIT_AS, ulimit)
+
     def set_cpu_affinity(self, cpus=[0]):
         if self.is_alive:
             os.sched_setaffinity(self.pid, list(cpus))
@@ -1217,7 +1232,7 @@ class Process(object):
 
     @classmethod
     def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None,
-                           cwd=None, msg=""):
+                           ulimit_mem_percentage=None, cwd=None, msg=""):
         """
         Fork command to background.
 
@@ -1266,13 +1281,13 @@ class Process(object):
         os.dup2(f.fileno(), sys.stderr.fileno())
 
         # run
-        cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, stop=False, msg=msg,
-                     cwd=cwd, failfile=failfile, pid_pipe=pid_pipe_w,
+        cls.exec_cmd(cmd, nice=nice, ioprio=ioprio, ulimit_mem_percentage=ulimit_mem_percentage,
+                     stop=False, msg=msg, cwd=cwd, failfile=failfile, pid_pipe=pid_pipe_w,
                      setpgid=True)
 
     @classmethod
-    def exec_cmd(cls, cmd, nice=None, ioprio=None, stop=False, cwd=None,
-                 msg="", failfile=None, pid_pipe=None, setpgid=False):
+    def exec_cmd(cls, cmd, nice=None, ioprio=None, ulimit_mem_percentage=None,
+                 stop=False, cwd=None, msg="", failfile=None, pid_pipe=None, setpgid=False):
         self = cls(os.getpid())
 
         if stop:
@@ -1294,6 +1309,8 @@ class Process(object):
                 os.nice(nice)
             if ioprio is not None:
                 self.set_ioprio(ioprio)
+            if ulimit_mem_percentage:
+                self.set_ulimit_mem_percentage(ulimit_mem_percentage)
             if cwd:
                 os.chdir(cwd)
             # run
