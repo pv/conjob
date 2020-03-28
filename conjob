@@ -572,12 +572,12 @@ class PidScheduler(object):
 
     def redirect_to_pager(self):
         pager = self.cfg['pager']
-        if pager is None:
+        if not pager:
             return
         if not os.isatty(sys.stdin.fileno()):
             return
         try:
-            p = subprocess.Popen(pager.strip().split(), stdin=subprocess.PIPE)
+            p = subprocess.Popen(pager.strip().split(), stdin=subprocess.PIPE, encoding='utf-8')
             sys.stdout = p.stdin
             atexit.register(lambda: p.communicate())
         except OSError:
