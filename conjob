@@ -704,7 +704,7 @@ def do_list(sched, p):
     try:
         for row in rows:
             print(" ".join(len_formats[fld] % row[fld] for fld in fields))
-    except IOError:
+    except BrokenPipeError:
         pass
 
 def do_info(sched, p):
