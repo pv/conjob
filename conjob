@@ -196,7 +196,7 @@ class PidScheduler(object):
             'joblist': filename + '.jobs',
             'nprocs': 2,
             'nice': 10,
-            'ioprio': 7,
+            'ioprio': 'idle',
             'loadavg': 2.0,
             'max_mem_percentage': 75.0,
             'ulimit_mem_percentage': 100.0,
@@ -1145,11 +1145,14 @@ class Process(object):
     def is_alive(self):
         return os.path.isdir('/proc/%d' % self.pid)
 
-    def set_ioprio(self, ioprio=0):
+    def set_ioprio(self, ioprio='idle'):
         """Set IO priority"""
         if self.is_alive:
-            subprocess.call(['ionice', '-p', str(self.pid), '-n', str(ioprio)],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if ioprio == 'idle':
+                cmd = ['ionice', '-p', str(self.pid), '-c', '3']
+            else:
+                cmd = ['ionice', '-p', str(self.pid), '-c', '2', '-n', str(ioprio)]
+            subprocess.call(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def set_ulimit_mem_percentage(self, ulimit_mem_percentage=100):
         """Set VM address space ulimit"""
