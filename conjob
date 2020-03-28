@@ -32,8 +32,8 @@ Commands:
 import os, sys, time, optparse, signal, tempfile, shutil, re, fnmatch
 import fcntl
 import datetime, subprocess, atexit
-import configobj
-import pickle as pickle
+import configparser
+import pickle
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -187,24 +187,29 @@ class Job(object):
 class PidScheduler(object):
     def __init__(self, filename):
         self.jobs = []
-        self.cfg = configobj.ConfigObj(filename)
-        self.cfg.setdefault('logdir', filename + '.log')
-        self.cfg.setdefault('joblist', filename + '.jobs')
-        self.cfg.setdefault('nprocs', 2)
-        self.cfg.setdefault('nice', 10)
-        self.cfg.setdefault('ioprio', 7)
-        self.cfg.setdefault('loadavg', 2)
-        self.cfg.setdefault('max_mem_percentage', 75)
-        self.cfg.setdefault('pager', None)
-        self.cfg.setdefault('min_vm_free', 1e9)
-        self.cfg['min_vm_free'] = float(self.cfg['min_vm_free'])
-        self.cfg['nice'] = int(self.cfg['nice'])
-        self.cfg['ioprio'] = int(self.cfg['ioprio'])
-        self.cfg['nprocs'] = int(self.cfg['nprocs'])
-        self.cfg['loadavg'] = float(self.cfg['loadavg'])
-        self.cfg['logdir'] = str(self.cfg['logdir'])
-        self.cfg['pager'] = str(self.cfg['pager'])
-        self.cfg['max_mem_percentage'] = float(self.cfg['max_mem_percentage'])
+
+        defaults = {
+            'logdir': filename + '.log',
+            'joblist': filename + '.jobs',
+            'nprocs': 2,
+            'nice': 10,
+            'ioprio': 7,
+            'loadavg': 2.0,
+            'max_mem_percentage': 75,
+            'pager': '',
+            'min_vm_free': 1e9,
+        }
+
+        cfg = configparser.RawConfigParser(defaults=defaults)
+        with open(filename, 'r') as f:
+            text = "[options]\n" + f.read()
+        cfg.read_string(text)
+
+        cvt = {str: cfg.get, int: cfg.getint, float: cfg.getfloat}
+        self.cfg = {}
+        for key, value in defaults.items():
+            self.cfg[key] = cvt[type(value)]('options', key)
+
         self.lockfile = open(CFGFILE + ".lock", "a")
         self.lock_count = 0
         self.load_jobs()
