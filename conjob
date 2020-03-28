@@ -198,7 +198,6 @@ class PidScheduler(object):
             'loadavg': 2.0,
             'max_mem_percentage': 75,
             'pager': '',
-            'min_vm_free': 1e9,
         }
 
         cfg = configparser.RawConfigParser(defaults=defaults)
@@ -391,34 +390,36 @@ class PidScheduler(object):
         # Avoid virtual memory exhaustion
         vm_free = Process.get_free_mem() + Process.get_free_swap()
         vm_total = Process.get_total_mem() + Process.get_total_swap()
-        vm_min = min(self.cfg['min_vm_free']/1024., (1 - mem_factor)*vm_total)
-        vm_exhausted = (vm_free < vm_min)
+        vm_exhausted = (vm_free < (1 - mem_factor)*vm_total)
 
         # Stop / continue
         to_run = queue[:nprocs]
         to_stop = queue[nprocs:]
 
         resumed = False
-        skipped = 0
+        some_job_running = False
 
         for cpu, job in enumerate(to_run):
             if vm_exhausted and not job.is_alive:
                 # don't start new jobs if VM is exhausted
-                skipped += 1
                 continue
 
             if not job.is_running and not resumed:
                 # only resume one job per schedule cycle.
                 job.run(nice=self.cfg['nice'], ioprio=self.cfg['ioprio'])
                 resumed = True
+                some_job_running = True
+            elif job.is_running:
+                some_job_running = True
+
             job.set_cpu_affinity(list(range(os.cpu_count())))
 
         for job in to_stop:
-            if vm_exhausted and skipped > 0 and job.is_alive and not resumed:
+            if vm_exhausted and job.is_alive and not some_job_running:
                 # under VM exhaustion, run any existing processes to completion
                 job.resume()
-                skipped -= 1
                 resumed = True
+                some_job_running = True
                 continue
             job.suspend()
 
