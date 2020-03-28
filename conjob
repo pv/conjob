@@ -347,14 +347,9 @@ class PidScheduler(object):
             self.jobs.remove(job)
 
     @staticmethod
-    def cmp_prio(a, b):
-        # highest priority first
-        v = cmp(b.priority, a.priority)
-        if v != 0:
-            return v
-        # then, alive processes first
-        v = cmp(b.is_alive, a.is_alive)
-        return v
+    def cmp_prio_key(p):
+        # highest priority first, then alive processes first
+        return (-p.priority, 0 if p.is_alive else 1)
 
     def schedule(self):
         self.lock()
@@ -369,7 +364,7 @@ class PidScheduler(object):
 
         # Sort
         queue = [x for x in self.jobs if not x.completed]
-        queue.sort(PidScheduler.cmp_prio)
+        queue.sort(key=PidScheduler.cmp_prio_key)
         nprocs = self.cfg['nprocs']
 
         # Adjust according to load average
@@ -651,7 +646,7 @@ def _get_list_jobs(sched, p):
     jobs = list(sched.jobs_iter(args))
 
     if options.sort == 'prio':
-        jobs.sort(PidScheduler.cmp_prio)
+        jobs.sort(key=PidScheduler.cmp_prio_key)
     elif options.sort == 'end':
         jobs.sort(key=lambda job: job.end_time)
 
