@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*-python-*-
 """
 conjob [options] COMMAND [...]
@@ -29,11 +29,11 @@ Commands:
   '@' the command lines, '%' the PIDs.
 
 """
-import os, sys, time, optparse, signal, tempfile, shutil, glob, re, fnmatch
+import os, sys, time, optparse, signal, tempfile, shutil, re, fnmatch
 import fcntl
 import datetime, subprocess, atexit
 import configobj
-import cPickle as pickle
+import pickle as pickle
 
 CFGFILE = os.path.expanduser("~/.conjob")
 
@@ -225,7 +225,7 @@ class PidScheduler(object):
 
     def load_jobs_cfg(self, stream):
         cfg = configobj.ConfigObj(stream)
-        for key, value in cfg.iteritems():
+        for key, value in cfg.items():
             self.jobs.append(Job.from_section(value))
 
     def dump_jobs_cfg(self, stream):
@@ -505,7 +505,7 @@ class PidScheduler(object):
         if listspec.startswith('in:'):
             fn = listspec[3:]
             if not os.path.isfile(fn):
-                print "%s is not a file" % fn
+                print("%s is not a file" % fn)
                 raise SystemExit(1)
 
             f = open(fn, 'r')
@@ -532,8 +532,8 @@ class PidScheduler(object):
                 if not x: return default
                 return int(x)
 
-            limits = [(toint(m.group(1), -sys.maxint),
-                       toint(m.group(2), sys.maxint)) for m in ms]
+            limits = [(toint(m.group(1), -sys.maxsize),
+                       toint(m.group(2), sys.maxsize)) for m in ms]
 
             offset = 0
             spec2 = listspec
@@ -606,7 +606,7 @@ def do_schedule(sched, p):
     else:
         p.error("invalid number of arguments")
 
-    for k in xrange(count):
+    for k in range(count):
         sched.schedule()
     sched.save_jobs()
 
@@ -698,7 +698,7 @@ def do_list(sched, p):
 
     try:
         for row in rows:
-            print " ".join(len_formats[fld] % row[fld] for fld in fields)
+            print(" ".join(len_formats[fld] % row[fld] for fld in fields))
     except IOError:
         pass
 
@@ -748,7 +748,7 @@ Duration: %(duration)s
 
 """.strip() % info) + "\n")
         try:
-            print s
+            print(s)
         except IOError:
             return
 
@@ -783,16 +783,16 @@ def do_tail(sched, p, base_cmd=['tail', '-f']):
 
     if base_cmd[0] == 'tail':
         for fn in files:
-            print fn
+            print(fn)
             f = open(fn, 'r')
-            print "    " + f.readline(),
-            print "    " + f.readline(),
-            print "    " + f.readline(),
+            print("    " + f.readline(), end=' ')
+            print("    " + f.readline(), end=' ')
+            print("    " + f.readline(), end=' ')
             f.close()
-        print "="*79
+        print("="*79)
 
     if not files:
-        print "No files to tail"
+        print("No files to tail")
         return
 
     cmd = base_cmd + files
@@ -978,7 +978,7 @@ Estimated completion time (based on selected completed jobs)
            r_hist=indent(r_hist, 2),
            fr_hist=indent(fr_hist, 2),
            )
-    print msg
+    print(msg)
 
 def secs(dt):
     return 60*60*24*dt.days + dt.seconds + 1e-6*dt.microseconds
@@ -1276,10 +1276,10 @@ class Process(object):
             self.suspend()
 
         if msg:
-            print msg
-        print datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),os.getcwd()
-        print shell_join(cmd)
-        print "-"*79
+            print(msg)
+        print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),os.getcwd())
+        print(shell_join(cmd))
+        print("-"*79)
         sys.stdout.flush()
         sys.stderr.flush()
         if failfile and os.path.isfile(failfile):
@@ -1353,7 +1353,7 @@ class KillWatch(object):
             self.flush()
 
     def flush(self):
-        for k in xrange(100):
+        for k in range(100):
             alive = False
             for process in self.queue:
                 if process.is_alive:
