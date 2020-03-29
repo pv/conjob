@@ -393,15 +393,14 @@ class PidScheduler(object):
                 break
 
         # Check for memory pressure:
-        # if detected, run existing jobs to completion one by one
+        # if VM exhausted, run existing jobs to completion
+        # if memory pressure, suspend all jobs
         vm_free = Process.get_free_mem() + Process.get_free_swap()
         vm_total = Process.get_total_mem() + Process.get_total_swap()
         vm_exhausted = (vm_free < (1 - mem_factor)*vm_total)
 
         pressure = Process.pressure()['full']
         mem_pressure = (max(pressure['avg60'], pressure['avg10']) > self.cfg['max_mem_pressure'])
-
-        under_pressure = vm_exhausted or mem_pressure
 
         # Stop / continue
         to_run = queue[:nprocs]
@@ -411,12 +410,12 @@ class PidScheduler(object):
         some_job_running = False
 
         for cpu, job in enumerate(to_run):
-            if under_pressure:
+            if vm_exhausted or mem_pressure:
                 if not job.is_alive:
-                    # don't start new jobs if under pressure
+                    # don't start new jobs
                     continue
-                elif some_job_running:
-                    # run only one job at a time if under pressure
+                elif mem_pressure:
+                    # if under pressure, halt all jobs and wait it to pass
                     job.suspend()
                     continue
 
@@ -433,8 +432,8 @@ class PidScheduler(object):
             job.set_cpu_affinity(list(range(os.cpu_count())))
 
         for job in to_stop:
-            if under_pressure and job.is_alive and not some_job_running:
-                # under pressure, run existing processes to completion (one by one)
+            if (vm_exhausted and not mem_pressure) and job.is_alive and not some_job_running:
+                # under VM exhaustion, run existing processes to completion (one by one)
                 job.resume()
                 resumed = True
                 some_job_running = True
