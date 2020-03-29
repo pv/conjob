@@ -384,7 +384,7 @@ class PidScheduler(object):
         mem_max = total_mem * mem_factor
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
-                mem_max -= job.process.vm_peak
+                mem_max -= job.process.mem_ceiling
             else:
                 mem_max -= 0.05 * total_mem
             if mem_max < 0 and j > 0:
@@ -1099,34 +1099,9 @@ class Process(object):
         self.kill(signal.SIGCONT)
 
     @property
-    def mem_used(self):
-        dr = '/proc/%d' % self.pid
-        if os.path.isdir(dr):
-            f = open('%s/status' % dr, 'r')
-            try:
-                lines = f.read().split("\n")
-                for line in lines:
-                    m = re.match(r'^VmRSS:\s*(\d+) kB$', line)
-                    if m:
-                        return float(m.group(1))
-            finally:
-                f.close()
-        return 0
-
-    @property
-    def vm_peak(self):
-        dr = '/proc/%d' % self.pid
-        if os.path.isdir(dr):
-            f = open('%s/status' % dr, 'r')
-            try:
-                lines = f.read().split("\n")
-                for line in lines:
-                    m = re.match(r'^VmPeak:\s*(\d+) kB$', line)
-                    if m:
-                        return float(m.group(1))
-            finally:
-                f.close()
-        return 0
+    def mem_ceiling(self):
+        meminfo = self._proc_meminfo()
+        return meminfo.get('VmHWM', 0) + meminfo.get('VmSwap', 0)
 
     @property
     def is_running(self):
@@ -1220,18 +1195,27 @@ class Process(object):
         return Process._meminfo().get('SwapFree', 1e99)
 
     @staticmethod
+    def _parse_meminfo(f):
+        lines = f.read().split("\n")
+        info = {}
+        for line in lines:
+            m = re.match(r'^([a-zA-Z]+):\s*(\d+) kB$', line)
+            if m:
+                info[m.group(1)] = float(m.group(2))
+        return info
+
+    @staticmethod
     def _meminfo():
-        f = open('/proc/meminfo', 'r')
+        with open('/proc/meminfo', 'r') as f:
+            return Process._parse_meminfo(f)
+
+    def _proc_meminfo(self):
+        dr = '/proc/%d' % self.pid
         try:
-            lines = f.read().split("\n")
-            info = {}
-            for line in lines:
-                m = re.match(r'^([a-zA-Z]+):\s*(\d+) kB$', line)
-                if m:
-                    info[m.group(1)] = float(m.group(2))
-            return info
-        finally:
-            f.close()
+            with open('%s/status' % dr, 'r') as f:
+                return Process._parse_meminfo(f)
+        except IOError:
+            return {}
 
     @classmethod
     def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None,
