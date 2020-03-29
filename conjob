@@ -199,6 +199,7 @@ class PidScheduler(object):
             'ioprio': 'idle',
             'loadavg': 2.0,
             'max_mem_percentage': 75.0,
+            'max_mem_pressure': 60,
             'ulimit_mem_percentage': 100.0,
             'pager': '',
         }
@@ -391,10 +392,16 @@ class PidScheduler(object):
                 nprocs = j
                 break
 
-        # Avoid virtual memory exhaustion
+        # Check for memory pressure:
+        # if detected, run existing jobs to completion one by one
         vm_free = Process.get_free_mem() + Process.get_free_swap()
         vm_total = Process.get_total_mem() + Process.get_total_swap()
         vm_exhausted = (vm_free < (1 - mem_factor)*vm_total)
+
+        pressure = Process.pressure()['full']
+        mem_pressure = (max(pressure['avg60'], pressure['avg10']) > self.cfg['max_mem_pressure'])
+
+        under_pressure = vm_exhausted or mem_pressure
 
         # Stop / continue
         to_run = queue[:nprocs]
@@ -404,9 +411,14 @@ class PidScheduler(object):
         some_job_running = False
 
         for cpu, job in enumerate(to_run):
-            if vm_exhausted and not job.is_alive:
-                # don't start new jobs if VM is exhausted
-                continue
+            if under_pressure:
+                if not job.is_alive:
+                    # don't start new jobs if under pressure
+                    continue
+                elif some_job_running:
+                    # run only one job at a time if under pressure
+                    job.suspend()
+                    continue
 
             if not job.is_running and not resumed:
                 # only resume one job per schedule cycle.
@@ -421,8 +433,8 @@ class PidScheduler(object):
             job.set_cpu_affinity(list(range(os.cpu_count())))
 
         for job in to_stop:
-            if vm_exhausted and job.is_alive and not some_job_running:
-                # under VM exhaustion, run any existing processes to completion
+            if under_pressure and job.is_alive and not some_job_running:
+                # under pressure, run existing processes to completion (one by one)
                 job.resume()
                 resumed = True
                 some_job_running = True
@@ -1107,12 +1119,9 @@ class Process(object):
     def is_running(self):
         dr = '/proc/%d' % self.pid
         if os.path.isdir(dr):
-            f = open('%s/stat' % dr, 'r')
-            try:
+            with open('%s/stat' % dr, 'r') as f:
                 x = f.read().split()
                 return (x[2] != 'T')
-            finally:
-                f.close()
         else:
             return False
 
@@ -1196,10 +1205,10 @@ class Process(object):
 
     @staticmethod
     def _parse_meminfo(f):
-        lines = f.read().split("\n")
+        pat = re.compile('^([a-zA-Z]+):\\s*(\\d+) kB\n$')
         info = {}
-        for line in lines:
-            m = re.match(r'^([a-zA-Z]+):\s*(\d+) kB$', line)
+        for line in f:
+            m = pat.match(line)
             if m:
                 info[m.group(1)] = float(m.group(2))
         return info
@@ -1216,6 +1225,27 @@ class Process(object):
                 return Process._parse_meminfo(f)
         except IOError:
             return {}
+
+    @staticmethod
+    def pressure(component='memory'):
+        assert component in ('memory', 'cpu', 'io')
+
+        pat = re.compile(r'^(?P<which>(some|full)) '
+                         r'avg10=(?P<avg10>[0-9.]+) '
+                         r'avg60=(?P<avg60>[0-9.]+) '
+                         r'avg300=(?P<avg300>[0-9.]+) '
+                         r'total=(?P<total>[0-9.]+)\s*$')
+        info = {}
+
+        with open('/proc/pressure/' + component, 'r') as f:
+            for line in f:
+                m = pat.match(line)
+                if m:
+                    m = m.groupdict()
+                    which = m.pop('which')
+                    info[which] = {k: float(v) for k, v in m.items()}
+
+        return info
 
     @classmethod
     def fork_to_background(cls, cmd, logfile, nice=None, ioprio=None,
