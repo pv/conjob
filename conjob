@@ -32,6 +32,7 @@ Commands:
 import os, sys, time, optparse, signal, tempfile, shutil, re, fnmatch
 import fcntl
 import json
+import math
 import datetime, subprocess, atexit
 import configparser
 import pickle
@@ -1112,7 +1113,8 @@ class Process(object):
     @property
     def mem_ceiling(self):
         meminfo = self._proc_meminfo()
-        return meminfo.get('VmHWM', 0) + meminfo.get('VmSwap', 0)
+        rss = math.sqrt(meminfo.get('VmHWM', 0) * meminfo.get('VmRSS', 0))
+        return rss + meminfo.get('VmSwap', 0)
 
     @property
     def is_running(self):
