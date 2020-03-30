@@ -1315,7 +1315,13 @@ class Process(object):
 
         if msg:
             print(msg)
-        cmd = ['/usr/bin/systemd-run', '--user', '--scope'] + cmd
+
+        ret = subprocess.call(['systemctl', '--user', 'get-default'],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ret == 0:
+            # has user-level systemd
+            cmd = ['/usr/bin/systemd-run', '--user', '--scope'] + cmd
+
         print(datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),os.getcwd())
         print(shell_join(cmd))
         print("-"*79)
