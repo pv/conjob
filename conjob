@@ -823,7 +823,7 @@ def do_tail(sched, p, base_cmd=['tail', '-f']):
     os.execvp(cmd[0], cmd)
 
 def do_less(sched, p):
-    do_tail(sched, p, ['less', '+k', '-r'])
+    do_tail(sched, p, ['less', '-+F'])
 
 def get_sub_optparse(p, doc=None):
     if doc is None:
