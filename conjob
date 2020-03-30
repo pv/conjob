@@ -1234,7 +1234,11 @@ class Process(object):
                          r'avg60=(?P<avg60>[0-9.]+) '
                          r'avg300=(?P<avg300>[0-9.]+) '
                          r'total=(?P<total>[0-9.]+)\s*$')
-        info = {}
+
+        info = {'full': {'avg10': 0, 'avg60': 0}}
+
+        if not os.path.isdir('/proc/pressure'):
+            return info
 
         with open('/proc/pressure/' + component, 'r') as f:
             for line in f:
