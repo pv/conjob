@@ -379,8 +379,16 @@ class PidScheduler(object):
         max_nprocs = max(1, max_nprocs)
         nprocs = min(nprocs, max_nprocs)
 
+        # Adjust memory factor vs. pressure
+        pressure = Process.pressure()
+        pressure_full = max(pressure['full'][p] for p in ('avg10', 'avg60', 'avg300'))
+        pressure_some = max(pressure['some'][p] for p in ('avg10', 'avg60', 'avg300'))
+
+        max_pressure = max(pressure_full, pressure_some)
+        pressure_factor = min(max(0, 1 - max_pressure/100.), 1)
+
         # Adjust according to memory usage
-        mem_factor = self.cfg['max_mem_percentage'] / 100.
+        mem_factor = self.cfg['max_mem_percentage'] / 100. * pressure_factor
 
         total_mem = Process.get_total_mem()
         mem_max = total_mem * mem_factor
@@ -400,8 +408,7 @@ class PidScheduler(object):
         vm_total = Process.get_total_mem() + Process.get_total_swap()
         vm_exhausted = (vm_free < (1 - mem_factor)*vm_total)
 
-        pressure = Process.pressure()['full']
-        mem_pressure = (max(pressure['avg60'], pressure['avg10']) > self.cfg['max_mem_pressure'])
+        mem_pressure = (pressure_full > self.cfg['max_mem_pressure'])
 
         # Stop / continue
         to_run = queue[:nprocs]
@@ -1237,7 +1244,8 @@ class Process(object):
                          r'avg300=(?P<avg300>[0-9.]+) '
                          r'total=(?P<total>[0-9.]+)\s*$')
 
-        info = {'full': {'avg10': 0, 'avg60': 0}}
+        info = {'full': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': 0},
+                'some': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': 0}}
 
         if not os.path.isdir('/proc/pressure'):
             return info
