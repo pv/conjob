@@ -385,7 +385,8 @@ class PidScheduler(object):
         pressure_some = max(pressure['some'][p] for p in ('avg10', 'avg60', 'avg300'))
 
         max_pressure = max(pressure_full, pressure_some)
-        pressure_factor = min(max(0, 1 - max_pressure/100.), 1)
+        z = min(1, self.cfg['max_mem_pressure'])
+        pressure_factor = min(max(0, 1 - max_pressure/z), 1)
 
         # Adjust according to memory usage
         mem_factor = self.cfg['max_mem_percentage'] / 100. * pressure_factor
