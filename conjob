@@ -193,6 +193,7 @@ class Job(object):
 class PidScheduler(object):
     def __init__(self, filename):
         self.jobs = []
+        self.prev_pressure = 0.0
 
         defaults = {
             'logdir': filename + '.log',
@@ -263,6 +264,10 @@ class PidScheduler(object):
                 f = open(fn, 'rb')
                 try:
                     self.jobs = pickle.load(f)
+                    try:
+                        self.prev_pressure = pickle.load(f)
+                    except EOFError:
+                        pass
                 finally:
                     f.close()
             for job in self.jobs:
@@ -283,6 +288,7 @@ class PidScheduler(object):
             f = open(tmp_fn, 'wb')
             try:
                 pickle.dump(self.jobs, f)
+                pickle.dump(self.prev_pressure, f)
             finally:
                 f.close()
 
@@ -389,12 +395,12 @@ class PidScheduler(object):
 
         if pressure['full']['total'] < 0:
             # Missing data: guess from disk sleep status
-            num_running = sum(job.process.is_running for job in queue if job.is_alive)
-            num_disk = sum(job.process.is_disk_sleep for job in queue if job.is_alive)
-            if num_running == 0:
-                pressure_some = 100 * (num_disk > 0)
+            if any(job.process.is_disk_sleep for job in queue if job.is_alive):
+                pressure_full = 100
             else:
-                pressure_some = 100 * num_disk / num_running
+                pressure_full = 0
+            pressure_full = 0.1*pressure_full + (1 - 0.1)*self.prev_pressure
+            self.prev_pressure = pressure_full
 
         max_pressure = max(pressure_full, pressure_some)
         z = max(1, self.cfg['max_mem_pressure'])
@@ -409,7 +415,7 @@ class PidScheduler(object):
         other_rss = max(0, total_mem - our_rss - free_mem)
 
         mem_max = total_mem * mem_factor
-        rss_max = total_mem - other_rss - self.cfg['min_mem_free']
+        rss_max = (total_mem - other_rss - self.cfg['min_mem_free']) * mem_factor
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
                 mem_max -= job.process.mem_ceiling
