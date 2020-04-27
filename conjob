@@ -201,6 +201,7 @@ class PidScheduler(object):
             'loadavg': 2.0,
             'max_mem_percentage': 75.0,
             'max_mem_pressure': 60,
+            'min_mem_free': 0.0,
             'ulimit_mem_percentage': 100.0,
             'pager': '',
         }
@@ -410,6 +411,9 @@ class PidScheduler(object):
         vm_exhausted = (vm_free < (1 - mem_factor)*vm_total)
 
         mem_pressure = (pressure_full > self.cfg['max_mem_pressure'])
+
+        if Process.get_free_mem() < self.cfg['min_mem_free']:
+            vm_exhausted = True
 
         # Stop / continue
         to_run = queue[:nprocs]
