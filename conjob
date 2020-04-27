@@ -387,6 +387,15 @@ class PidScheduler(object):
         pressure_full = max(pressure['full'][p] for p in ('avg10', 'avg60', 'avg300'))
         pressure_some = max(pressure['some'][p] for p in ('avg10', 'avg60', 'avg300'))
 
+        if pressure['full']['total'] < 0:
+            # Missing data: guess from disk sleep status
+            num_running = sum(job.process.is_running for job in queue if job.is_alive)
+            num_disk = sum(job.process.is_disk_sleep for job in queue if job.is_alive)
+            if num_running == 0:
+                pressure_some = 100 * (num_disk > 0)
+            else:
+                pressure_some = 100 * num_disk / num_running
+
         max_pressure = max(pressure_full, pressure_some)
         z = max(1, self.cfg['max_mem_pressure'])
         pressure_factor = min(max(0, 1 - max_pressure/z), 1)
@@ -1152,6 +1161,16 @@ class Process(object):
             return False
 
     @property
+    def is_disk_sleep(self):
+        dr = '/proc/%d' % self.pid
+        if os.path.isdir(dr):
+            with open('%s/stat' % dr, 'r') as f:
+                x = f.read().split()
+                return (x[2] == 'D')
+        else:
+            return False
+
+    @property
     def is_alive(self):
         return os.path.isdir('/proc/%d' % self.pid)
 
@@ -1260,8 +1279,8 @@ class Process(object):
                          r'avg300=(?P<avg300>[0-9.]+) '
                          r'total=(?P<total>[0-9.]+)\s*$')
 
-        info = {'full': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': 0},
-                'some': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': 0}}
+        info = {'full': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': -1},
+                'some': {'avg10': 0, 'avg60': 0, 'avg300': 0, 'total': -1}}
 
         if not os.path.isdir('/proc/pressure'):
             return info
