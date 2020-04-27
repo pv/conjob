@@ -394,12 +394,14 @@ class PidScheduler(object):
 
         total_mem = Process.get_total_mem()
         mem_max = total_mem * mem_factor
+        rss_max = total_mem - self.cfg['min_mem_free']
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
                 mem_max -= job.process.mem_ceiling
+                rss_max -= job.process.mem_rss
             else:
                 mem_max -= 0.05 * total_mem
-            if mem_max < 0 and j > 0:
+            if (mem_max < 0 or rss_max < 0) and j > 0:
                 nprocs = j
                 break
 
@@ -1127,6 +1129,11 @@ class Process(object):
         meminfo = self._proc_meminfo()
         rss = math.sqrt(meminfo.get('VmHWM', 0) * meminfo.get('VmRSS', 0))
         return rss + meminfo.get('VmSwap', 0)
+
+    @property
+    def mem_rss(self):
+        meminfo = self._proc_meminfo()
+        return meminfo.get('VmRSS', 0)
 
     @property
     def is_running(self):
