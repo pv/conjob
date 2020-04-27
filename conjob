@@ -415,7 +415,8 @@ class PidScheduler(object):
         other_rss = max(0, total_mem - our_rss - free_mem)
 
         mem_max = total_mem * mem_factor
-        rss_max = (total_mem - other_rss - self.cfg['min_mem_free']) * mem_factor
+        rss_max = (total_mem - other_rss - self.cfg['min_mem_free']) * pressure_factor
+
         for j, job in enumerate(queue[:nprocs]):
             if job.is_alive:
                 mem_max -= job.process.mem_ceiling
