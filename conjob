@@ -182,6 +182,8 @@ class Job(object):
 
     @property
     def failed(self):
+        if self.is_alive:
+            return False
         return os.path.isfile(self.log_file + '.fail')
 
     def __repr__(self):
@@ -1351,8 +1353,10 @@ class Process(object):
         print("-"*79)
         sys.stdout.flush()
         sys.stderr.flush()
-        if failfile and os.path.isfile(failfile):
-            os.unlink(failfile)
+
+        if failfile:
+            with open(failfile, 'w') as f:
+                pass
 
         try:
             # prepare environment
@@ -1389,10 +1393,12 @@ class Process(object):
             except KeyboardInterrupt:
                 pass
 
-        if ret != 0 and failfile:
-            f = open(failfile, 'w')
-            f.write('%d\n' % ret)
-            f.close()
+        if failfile:
+            if ret == 0:
+                os.unlink(failfile)
+            else:
+                with open(failfile, 'w') as f:
+                    f.write('%d\n' % ret)
         sys.exit(0)
 
     def __repr__(self):
