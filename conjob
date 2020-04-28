@@ -397,9 +397,10 @@ class PidScheduler(object):
             # Missing data: guess from disk sleep status
             if any(job.process.is_disk_sleep for job in queue if job.is_alive):
                 pressure_full = 100
+                pressure_full = 0.01*pressure_full + (1 - 0.01)*self.prev_pressure
             else:
                 pressure_full = 0
-            pressure_full = 0.1*pressure_full + (1 - 0.1)*self.prev_pressure
+                pressure_full = 0.02*pressure_full + (1 - 0.02)*self.prev_pressure
             self.prev_pressure = pressure_full
 
         max_pressure = max(pressure_full, pressure_some)
@@ -1149,7 +1150,7 @@ class Process(object):
     @property
     def mem_ceiling(self):
         meminfo = self._proc_meminfo()
-        rss = math.sqrt(meminfo.get('VmHWM', 0) * meminfo.get('VmRSS', 0))
+        rss = meminfo.get('VmRSS', 0)
         return rss + meminfo.get('VmSwap', 0)
 
     @property
